@@ -85,7 +85,7 @@ export default function Home() {
 
         const dishRes = await fetch('/api/dishes?action=getAll');
         const dishData = await dishRes.json();
-        setDishes(dishData);
+        setDishes(Array.isArray(dishData) ? dishData : []);
       } catch (error) {
         console.error('Init error:', error);
       } finally {
