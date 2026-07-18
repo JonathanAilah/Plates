@@ -146,6 +146,18 @@ export async function getSellerDishes(sellerId: number) {
   return result.rows;
 }
 
+export async function updateDishPrice(id: number, price: number) {
+  const result = await sql`
+    UPDATE dishes SET price = ${price} WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function deleteDish(id: number) {
+  await sql`DELETE FROM dishes WHERE id = ${id}`;
+  return { success: true };
+}
+
 export async function toggleLike(userId: number, dishId: number) {
   try {
     await sql`INSERT INTO dish_likes (user_id, dish_id) VALUES (${userId}, ${dishId})`;
