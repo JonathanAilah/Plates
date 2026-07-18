@@ -9,10 +9,17 @@ export async function initializeDatabase() {
         email VARCHAR(255) UNIQUE NOT NULL,
         avatar VARCHAR(2) NOT NULL,
         bio TEXT,
+        photo_url TEXT,
+        latitude DOUBLE PRECISION,
+        longitude DOUBLE PRECISION,
         is_seller BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `;
+
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dishes (
@@ -22,10 +29,13 @@ export async function initializeDatabase() {
         description TEXT,
         price DECIMAL(10, 2) NOT NULL,
         emoji VARCHAR(10) NOT NULL,
+        photo_url TEXT,
         likes INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `;
+
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS photo_url TEXT`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dish_likes (
@@ -85,10 +95,24 @@ export async function updateUserSeller(id: number, isSeller: boolean) {
   return result.rows[0];
 }
 
-export async function createDish(sellerId: number, name: string, description: string, price: number, emoji: string) {
+export async function updateUserLocation(id: number, latitude: number, longitude: number) {
   const result = await sql`
-    INSERT INTO dishes (seller_id, name, description, price, emoji)
-    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji})
+    UPDATE users SET latitude = ${latitude}, longitude = ${longitude} WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function updateUserProfile(id: number, name: string, bio: string, photoUrl: string | null) {
+  const result = await sql`
+    UPDATE users SET name = ${name}, bio = ${bio}, photo_url = ${photoUrl} WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function createDish(sellerId: number, name: string, description: string, price: number, emoji: string, photoUrl: string | null) {
+  const result = await sql`
+    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url)
+    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl})
     RETURNING *
   `;
   return result.rows[0];
@@ -96,7 +120,8 @@ export async function createDish(sellerId: number, name: string, description: st
 
 export async function getDishes() {
   const result = await sql`
-    SELECT d.*, u.name as seller_name, u.avatar as seller_avatar
+    SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
+           u.latitude as seller_latitude, u.longitude as seller_longitude
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
     ORDER BY d.created_at DESC
