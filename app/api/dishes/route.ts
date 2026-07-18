@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createDish, getDishes, getDish, getSellerDishes, toggleLike, isLiked } from '@/lib/db';
+import { createDish, getDishes, getDish, getSellerDishes, toggleLike, isLiked, updateDishPrice, deleteDish } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,6 +43,16 @@ export async function POST(request: NextRequest) {
       const result = await toggleLike(userId, dishId);
       const liked = await isLiked(userId, dishId);
       return NextResponse.json({ liked });
+    }
+
+    if (action === 'updatePrice') {
+      const dish = await updateDishPrice(dishId, price);
+      return NextResponse.json(dish);
+    }
+
+    if (action === 'delete') {
+      const result = await deleteDish(dishId);
+      return NextResponse.json(result);
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
