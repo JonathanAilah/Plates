@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createUser, getUser, updateUserSeller, initializeDatabase } from '@/lib/db';
+import { createUser, getUser, updateUserSeller, updateUserLocation, updateUserProfile, initializeDatabase } from '@/lib/db';
 
 export async function POST(request: NextRequest) {
   try {
-    const { action, name, email, avatar, id, isSeller } = await request.json();
+    const { action, name, email, avatar, id, isSeller, latitude, longitude, bio, photoUrl } = await request.json();
 
     if (action === 'create') {
       const user = await createUser(name, email, avatar);
@@ -17,6 +17,16 @@ export async function POST(request: NextRequest) {
 
     if (action === 'toggleSeller') {
       const user = await updateUserSeller(id, isSeller);
+      return NextResponse.json(user);
+    }
+
+    if (action === 'updateLocation') {
+      const user = await updateUserLocation(id, latitude, longitude);
+      return NextResponse.json(user);
+    }
+
+    if (action === 'updateProfile') {
+      const user = await updateUserProfile(id, name, bio, photoUrl ?? null);
       return NextResponse.json(user);
     }
 
