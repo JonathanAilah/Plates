@@ -32,10 +32,10 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { action, sellerId, name, description, price, emoji, userId, dishId } = await request.json();
+    const { action, sellerId, name, description, price, emoji, userId, dishId, photoUrl } = await request.json();
 
     if (action === 'create') {
-      const dish = await createDish(sellerId, name, description, price, emoji);
+      const dish = await createDish(sellerId, name, description, price, emoji, photoUrl ?? null);
       return NextResponse.json(dish);
     }
 
