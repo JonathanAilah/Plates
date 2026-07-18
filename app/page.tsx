@@ -254,12 +254,12 @@ export default function Home() {
     setDishPhotoPreview(URL.createObjectURL(file));
   };
 
-  const addDish = async (dishName: string) => {
+  const addDish = async (dishName: string, priceValue: number) => {
     if (!user) return;
     try {
       const emojis = ['🍕', '🍔', '🌮', '🍝', '🥘', '🍗', '🍜', '🍰'];
       const emoji = emojis[Math.floor(Math.random() * emojis.length)];
-      const price = Math.floor(Math.random() * 10) + 8;
+      const price = priceValue;
 
       let photoUrl: string | null = null;
       if (dishPhotoFile) {
@@ -296,6 +296,36 @@ export default function Home() {
       if (dishFileInputRef.current) dishFileInputRef.current.value = '';
     } catch (error) {
       console.error('Add dish error:', error);
+    }
+  };
+
+  const updatePrice = async (dishId: number, newPrice: number) => {
+    if (!newPrice || newPrice <= 0) return;
+    try {
+      const res = await fetch('/api/dishes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updatePrice', dishId, price: newPrice }),
+      });
+      const updated = await res.json();
+      setMyDishes(myDishes.map(d => d.id === dishId ? { ...d, price: updated.price } : d));
+      setDishes(dishes.map(d => d.id === dishId ? { ...d, price: updated.price } : d));
+    } catch (error) {
+      console.error('Update price error:', error);
+    }
+  };
+
+  const removeDish = async (dishId: number) => {
+    try {
+      await fetch('/api/dishes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', dishId }),
+      });
+      setMyDishes(myDishes.filter(d => d.id !== dishId));
+      setDishes(dishes.filter(d => d.id !== dishId));
+    } catch (error) {
+      console.error('Delete dish error:', error);
     }
   };
 
@@ -549,6 +579,9 @@ export default function Home() {
             <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 600 }}>What are you cooking today?</label>
             <input type="text" id="dishName" placeholder="e.g., Homemade Pasta" style={{ width: '100%', padding: '12px', border: '1px solid #e0e0e0', borderRadius: '6px', fontSize: '14px', background: 'white', marginBottom: '8px', boxSizing: 'border-box' }} />
 
+            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 600 }}>Price ($)</label>
+            <input type="number" id="dishPrice" placeholder="e.g., 12" min="0" step="0.01" style={{ width: '100%', padding: '12px', border: '1px solid #e0e0e0', borderRadius: '6px', fontSize: '14px', background: 'white', marginBottom: '8px', boxSizing: 'border-box' }} />
+
             <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 600 }}>Photo (optional)</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
               <div onClick={() => dishFileInputRef.current?.click()} style={{ width: '64px', height: '64px', borderRadius: '8px', background: '#f9f9f9', border: '1px dashed #ccc', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden', flexShrink: 0 }}>
@@ -563,10 +596,13 @@ export default function Home() {
             </div>
 
             <button onClick={() => {
-              const input = document.getElementById('dishName') as HTMLInputElement;
-              if (input.value.trim()) {
-                addDish(input.value.trim());
-                input.value = '';
+              const nameInput = document.getElementById('dishName') as HTMLInputElement;
+              const priceInput = document.getElementById('dishPrice') as HTMLInputElement;
+              const priceValue = parseFloat(priceInput.value);
+              if (nameInput.value.trim() && priceValue > 0) {
+                addDish(nameInput.value.trim(), priceValue);
+                nameInput.value = '';
+                priceInput.value = '';
               }
             }} style={{ width: '100%', padding: '10px', background: '#d4704e', color: 'white', border: 'none', borderRadius: '6px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
               <Plus size={16} /> Add to Menu
@@ -577,17 +613,33 @@ export default function Home() {
             <div>
               <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '12px' }}>Your Menu</h3>
               {myDishes.map(dish => (
-                <div key={dish.id} style={{ background: '#f9f9f9', padding: '12px', borderRadius: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div key={dish.id} style={{ background: '#f9f9f9', padding: '12px', borderRadius: '8px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
                     <div style={{ width: '36px', height: '36px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'white', fontSize: '20px' }}>
                       {dish.photo_url ? <img src={dish.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : dish.emoji}
                     </div>
-                    <div>
-                      <div style={{ fontSize: '16px', fontWeight: 600 }}>{dish.name}</div>
-                      <div style={{ fontSize: '13px', color: '#999' }}>${dish.price}</div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: '16px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dish.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                        <span style={{ fontSize: '13px', color: '#999' }}>$</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          defaultValue={dish.price}
+                          onBlur={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (val > 0 && val !== dish.price) updatePrice(dish.id, val);
+                          }}
+                          style={{ width: '60px', padding: '2px 4px', border: '1px solid #e0e0e0', borderRadius: '4px', fontSize: '13px', background: 'white' }}
+                        />
+                      </div>
                     </div>
                   </div>
-                  <span style={{ fontSize: '12px', color: '#999' }}>❤️ {dish.likes}</span>
+                  <span style={{ fontSize: '12px', color: '#999', flexShrink: 0 }}>❤️ {dish.likes}</span>
+                  <button onClick={() => removeDish(dish.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', color: '#e74c3c', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                    <X size={18} />
+                  </button>
                 </div>
               ))}
             </div>
