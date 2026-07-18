@@ -57,12 +57,16 @@ function distanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): 
 }
 
 async function uploadImage(file: File): Promise<string | null> {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await fetch('/api/upload', { method: 'POST', body: form });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.url ?? null;
+  return new Promise((resolve) => {
+    if (file.size > 4 * 1024 * 1024) {
+      resolve(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function Home() {
