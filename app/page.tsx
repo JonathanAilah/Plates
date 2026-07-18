@@ -59,8 +59,12 @@ export default function Home() {
         });
 
         const storedUserId = localStorage.getItem('plates_user_id');
-        if (storedUserId) {
-          const res = await fetch(`/api/users?action=get&id=${storedUserId}`);
+        if (storedUserId && storedUserId !== 'undefined' && storedUserId !== 'null') {
+          const res = await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'get', id: storedUserId }),
+          });
           const userData = await res.json();
           setUser(userData);
         } else {
