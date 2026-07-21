@@ -75,6 +75,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(user);
     }
 
+    if (action === 'acceptTerms') {
+      const version = String(body.version || '').trim();
+      if (!version) return NextResponse.json({ error: 'version required' }, { status: 400 });
+      const { acceptTerms } = await import('@/lib/db');
+      const user = await acceptTerms(me.id, version);
+      return NextResponse.json(user);
+    }
+
     if (action === 'updateAddress') {
       const user = await updateUserAddress(me.id, body.address, body.latitude, body.longitude);
       return NextResponse.json(user);

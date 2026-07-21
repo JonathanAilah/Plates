@@ -1,76 +1,95 @@
-# Plates — Cook-controlled pickup bounds + kitchen environment on meal card
+# Plates — Terms + Privacy Policy pages
 
-Two features stacked.
+Adds Terms of Service, Privacy Policy, and an acceptance flow for new users.
 
-## Feature 1: Cook sets pickup time bounds
+## What's included
 
-Each cook can now define their own minimum and maximum pickup time. Buyers can only choose within that window.
+**Two new public pages**
+- `/terms` — Terms of Service (placeholder text I drafted, marked clearly as not legal advice)
+- `/privacy` — Privacy Policy (also placeholder, mentions Clerk, Neon, Vercel, Google Maps, Stripe, OpenAI)
 
-**In the Kitchen profile**, a new "Pickup time window" section appears with two sliders:
-- **Minimum**: 5 min to 120 min in 5-min steps
-- **Maximum**: 15 min to 240 min (4 hours) in 5-min steps
+Both are server-rendered, accessible to anyone (including anonymous users), have proper SEO metadata, and match the app's design system.
 
-The sliders auto-adjust each other so max is always > min. Default is 15 min minimum / 120 min maximum (matches the old hard-coded values).
+**Blocking acceptance modal**
+First time a signed-in user opens the app after the terms are updated (or their first-ever sign-in), a full-screen modal appears:
+- "Welcome to Plates. Before you get started, please review and accept our Terms of Service and Privacy Policy."
+- Two buttons that open /terms and /privacy in new tabs
+- Checkbox: "I agree to the Plates Terms of Service and Privacy Policy."
+- Continue button — disabled until checkbox is ticked
+- Cannot be dismissed. Must accept to use the app.
 
-**In the buyer's Cart**, the pickup time slider now:
-- **min = MAX of all cooks' minimums in the cart**
-- **max = MIN of all cooks' maximums in the cart**
-- Slider steps changed from 15 to 5 min (finer control now that cooks may have narrower ranges)
-- Below the slider, shows the applicable range as text:
-  - Single cook: `"Marisol Vega accepts pickups from 25 min to 90 min"`
-  - Multi-cook: `"Range narrowed to fit all cooks in your cart"`
+**Legal tracking**
+When a user accepts, we record `terms_accepted_at` (timestamp) and `terms_version` (which version they accepted). Bumping `CURRENT_TERMS_VERSION` in `lib/legal.ts` will force everyone to re-accept next time they open the app.
 
-**Edge cases handled:**
-- If one cook needs 40 min minimum and another has a 30 min maximum, the range collapses to nothing — the slider gets disabled and shows the invalid range
-- If the buyer's chosen duration is outside a new bound (e.g. they had 30 min selected but then added a cook who needs 45 min), the effect clamps it to the new valid range
-- Cooks who haven't set bounds fall back to defaults (15..120)
-
-## Feature 2: Kitchen environment on the meal card
-
-The "Home kitchen / Food truck / Community kitchen" etc that cooks set last session is now visible to buyers.
-
-**On the meal detail page**, shown as a green chip next to the kitchen flags (e.g. "Home kitchen", "Nut-free kitchen"). Distinct color so it stands out from the dietary flags.
-
-**On dish list rows on Discover**, a compact tan chip shows the environment (e.g. "Food truck") alongside the distance and rating chips. If the cook hasn't set an environment, no chip appears.
-
-## Schema
-
-Two new columns on `users`:
-- `pickup_min_minutes INTEGER` — cook's minimum pickup duration (null = default 15)
-- `pickup_max_minutes INTEGER` — cook's maximum (null = default 120)
-
-Existing `kitchen_environment` column is now also SELECTed in `getDishes` (was set but not fetched).
+**Footer links**
+- Anonymous view: Terms · Privacy · © Plates below "Sign in to order" prompt
+- Discover screen: same footer below the "Are you a home cook?" card
+- Profile screen: same footer at the bottom
 
 ## Files
 
-- `lib/db.ts` — new columns + updateCookProfile signature + getDishes/getCart include the bounds
-- `app/api/users/route.ts` — passes pickupMinMinutes and pickupMaxMinutes through
-- `app/page.tsx` — cook's dual sliders, cart's bounded slider, kitchen env chips on meal detail + dish rows
+- `lib/db.ts` — new columns `terms_accepted_at` + `terms_version`, `acceptTerms()` helper
+- `lib/legal.ts` — NEW file, exports `CURRENT_TERMS_VERSION` constant
+- `app/terms/page.tsx` — NEW Terms page
+- `app/privacy/page.tsx` — NEW Privacy page
+- `app/api/users/route.ts` — new `acceptTerms` action
+- `app/page.tsx` — blocking modal + footer links + terms fields on User interface
 
 ## Install
 
-1. Extract zip.
-2. Overwrite the three files.
-3. Commit: `Cook-defined pickup bounds + kitchen env on meal cards`
-4. Push. Migrations run on next load.
+1. Extract this zip.
+2. Copy into your local repo, overwriting.
+3. GitHub Desktop shows 4 modified files + 3 new folders.
+4. Commit: `Add Terms of Service, Privacy Policy, and acceptance flow`
+5. Push origin.
 
-## Test
+Schema migration runs on next app load. Existing users won't be logged out, but will need to accept terms next time they use the app.
 
-**As cook:**
-1. Cook → Kitchen profile → scroll to "Pickup time window".
-2. Set min to 25 min, max to 60 min. Save.
-3. Sign out.
+## Bumping the terms later
 
-**As buyer:**
-4. Sign in as buyer. Add one of that cook's dishes to cart.
-5. Open Cart. Pickup slider should now be locked between 25 and 60 min.
-6. Under the slider: "Cook Name accepts pickups from 25 min to 1h".
-7. On Discover, that cook's dish row shows the "Home kitchen" (or whatever they set) chip next to distance/rating.
-8. Tap into the dish → meal detail shows the green "Home kitchen" badge inside the seller card.
+To force re-acceptance after changing the docs:
 
-## Design decisions
+1. Edit `/lib/legal.ts` — change `CURRENT_TERMS_VERSION` (e.g. from `'2026-07-21'` to `'2026-09-01'`)
+2. Push. Every user's next visit shows the modal again.
 
-- **Bounds are per-cook, not per-dish**: matches the reality that a home cook has one kitchen with one set of constraints. Simpler UI too.
-- **Cart intersects bounds, not per-item**: real-world, if you order from two cooks, you pick ONE time that works for both. Simplest UX.
-- **5-minute step in cart** (was 15): now that cooks can set 25 or 35 min minimums, 15-min steps were too coarse.
-- **Kitchen environment shown in green (meal detail)**: distinct from dietary flags (surface color) so buyers can visually parse "where" vs "what allergens".
+Version comparison is simple: modal shows unless `user.terms_version === CURRENT_TERMS_VERSION`. Right now it's stricter — modal shows unless `terms_accepted_at != null`, so any old acceptance counts. If you want strict version matching, change `needsTermsAcceptance` in page.tsx to `user.terms_version !== CURRENT_TERMS_VERSION`.
+
+## What to test
+
+**As anonymous:**
+1. Visit `/terms` — page loads, has yellow "placeholder notice" banner
+2. Visit `/privacy` — same
+3. Anonymous discover view has footer with Terms · Privacy · © links
+
+**As new signed-in user:**
+4. Sign up with a new email
+5. Complete Clerk sign-up
+6. Blocking modal appears immediately
+7. Try to close it — you can't
+8. Tap "Read Terms" — opens /terms in a new tab
+9. Come back, check the box, tap Continue
+10. Modal disappears. You're in the app normally.
+11. Refresh page — modal does NOT reappear (already accepted)
+
+**Existing users:**
+12. If you have a user whose `terms_accepted_at` is NULL in the DB, they will see the modal on next visit
+
+## Important placeholders to replace before real launch
+
+- Company name (currently just "Plates")
+- Physical address (not in current draft)
+- Contact email (needs a real support@ address once you have one)
+- Governing law jurisdiction (not specified)
+- Data controller info (for GDPR)
+- Age verification requirement enforcement (currently just claims users must be 18+)
+- Cottage food law citation (should be specific to your state — mine mentions California AB 626)
+
+## Legal disclaimer (yes, again)
+
+The text I wrote is PLACEHOLDER text. Before you launch to real strangers:
+1. Sign up for Termly (https://termly.io) or iubenda (~$10-20/month)
+2. Their wizard generates ToS + Privacy that matches your actual features and jurisdiction
+3. Copy their text into these two page files
+4. Better: have a lawyer review
+
+I'm not a lawyer. This code is a starting point, not compliance.

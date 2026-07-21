@@ -31,6 +31,9 @@ export async function initializeDatabase() {
     // Cook-defined pickup time bounds (in minutes). Buyers choose within [min, max].
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_min_minutes INTEGER`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_max_minutes INTEGER`;
+    // Terms acceptance tracking
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_hours TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_description TEXT`;
     // Auth columns
@@ -1248,6 +1251,18 @@ export async function updateUserBio(userId: number, bio: string) {
   const clean = String(bio || '').trim().slice(0, 500);
   const result = await sql`
     UPDATE users SET bio = ${clean} WHERE id = ${userId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// ============= TERMS ACCEPTANCE =============
+
+export async function acceptTerms(userId: number, version: string) {
+  const result = await sql`
+    UPDATE users
+    SET terms_accepted_at = CURRENT_TIMESTAMP, terms_version = ${version}
+    WHERE id = ${userId}
+    RETURNING *
   `;
   return result.rows[0];
 }

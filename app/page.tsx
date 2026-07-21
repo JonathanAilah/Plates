@@ -5,6 +5,7 @@ import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, 
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
+import { CURRENT_TERMS_VERSION } from '@/lib/legal';
 
 interface Dish {
   id: number;
@@ -237,6 +238,8 @@ interface User {
   pickup_description: string | null;
   pickup_min_minutes: number | null;
   pickup_max_minutes: number | null;
+  terms_accepted_at: string | null;
+  terms_version: string | null;
   role: 'user' | 'admin';
   seller_status: 'not_seller' | 'pending' | 'approved' | 'rejected' | 'suspended';
   rejection_reason: string | null;
@@ -427,6 +430,10 @@ export default function Home() {
   const [feedLocationStatus, setFeedLocationStatus] = useState<'unknown' | 'requesting' | 'granted' | 'denied'>('unknown');
   const [feedRadiusMi, setFeedRadiusMi] = useState<number>(5); // default 5 miles
   const [showRadiusPanel, setShowRadiusPanel] = useState(false);
+
+  // Terms acceptance modal
+  const [termsChecked, setTermsChecked] = useState(false);
+  const [termsSubmitting, setTermsSubmitting] = useState(false);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -649,6 +656,32 @@ export default function Home() {
       showToast('Dish deleted');
       setAdminDishes(prev => prev.filter(d => d.id !== dishId));
       await loadAdminStats();
+    }
+  };
+
+  // Accept the current Terms + Privacy Policy. Called from the blocking modal.
+  const handleAcceptTerms = async () => {
+    if (!user || !termsChecked || termsSubmitting) return;
+    setTermsSubmitting(true);
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'acceptTerms', version: CURRENT_TERMS_VERSION }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Could not save');
+        return;
+      }
+      setUser(data);
+      setTermsChecked(false);
+      showToast('Welcome to Plates');
+    } catch (e) {
+      console.error('Accept terms error:', e);
+      showToast('Network error');
+    } finally {
+      setTermsSubmitting(false);
     }
   };
 
@@ -1911,8 +1944,17 @@ export default function Home() {
             </div>
           )}
 
-          <div style={{ padding: '24px 20px 20px', textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}` }}>
+          <div style={{ padding: '24px 20px 12px', textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}` }}>
             Sign in to order, save favorites, and become a cook.
+          </div>
+
+          {/* Legal footer */}
+          <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
+            <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
+            <span>·</span>
+            <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
+            <span>·</span>
+            <span>© Plates {new Date().getFullYear()}</span>
           </div>
         </div>
       </div>
@@ -1987,9 +2029,55 @@ export default function Home() {
     return { clock, relative, overdue: true };
   };
 
+  const needsTermsAcceptance = user && user.terms_accepted_at == null;
+
   return (
     <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
       <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative' }}>
+
+        {/* ================= TERMS ACCEPTANCE MODAL (blocking) ================= */}
+        {needsTermsAcceptance && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(30,15,5,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: 20 }}>
+            <div style={{ background: C.card, borderRadius: 20, padding: '24px 22px', width: '100%', maxWidth: 380, boxShadow: '0 20px 60px rgba(0,0,0,.3)' }}>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink, marginBottom: 8 }}>Welcome to Plates</div>
+              <div style={{ font: `400 14px/1.5 ${font.sans}`, color: C.inkSoft, marginBottom: 18 }}>
+                Before you get started, please review and accept our Terms of Service and Privacy Policy.
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: 10, background: C.surface, border: `1px solid ${C.divider}`, borderRadius: 10, textAlign: 'center', font: `500 12.5px ${font.sans}`, color: C.terracotta, textDecoration: 'none' }}>
+                  Read Terms →
+                </a>
+                <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ flex: 1, padding: 10, background: C.surface, border: `1px solid ${C.divider}`, borderRadius: 10, textAlign: 'center', font: `500 12.5px ${font.sans}`, color: C.terracotta, textDecoration: 'none' }}>
+                  Read Privacy →
+                </a>
+              </div>
+
+              <label
+                onClick={() => setTermsChecked(!termsChecked)}
+                style={{ cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: 12, padding: 14, background: termsChecked ? C.greenLight : C.surface, borderRadius: 12, marginBottom: 16, border: `2px solid ${termsChecked ? C.green : 'transparent'}` }}
+              >
+                <div style={{ width: 22, height: 22, borderRadius: 6, background: termsChecked ? C.green : '#fff', border: `2px solid ${termsChecked ? C.green : C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', color: '#fff', font: `700 13px ${font.sans}`, marginTop: 1 }}>
+                  {termsChecked ? '✓' : ''}
+                </div>
+                <div style={{ font: `500 13px/1.4 ${font.sans}`, color: termsChecked ? C.green : C.ink }}>
+                  I agree to the Plates Terms of Service and Privacy Policy.
+                </div>
+              </label>
+
+              <button
+                onClick={handleAcceptTerms}
+                disabled={!termsChecked || termsSubmitting}
+                style={{ width: '100%', padding: 14, background: (termsChecked && !termsSubmitting) ? C.terracotta : C.cardAlt, color: (termsChecked && !termsSubmitting) ? '#fff' : C.mutedLight, borderRadius: 12, font: `500 14px ${font.sans}` }}
+              >
+                {termsSubmitting ? 'Saving…' : 'Continue'}
+              </button>
+              <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, textAlign: 'center', marginTop: 10 }}>
+                You must accept to use Plates.
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ================= DISCOVER ================= */}
         {screen === 'feed' && (
@@ -2251,6 +2339,15 @@ export default function Home() {
                 </div>
                 <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>{user.isSeller ? 'Kitchen' : 'Start cooking'}</div>
               </div>
+            </div>
+
+            {/* Legal footer */}
+            <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
+              <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
+              <span>·</span>
+              <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
+              <span>·</span>
+              <span>© Plates {new Date().getFullYear()}</span>
             </div>
             </>)}
 
@@ -3006,6 +3103,15 @@ export default function Home() {
                   Go to kitchen
                 </button>
               )}
+            </div>
+
+            {/* Legal footer */}
+            <div style={{ padding: '18px 0 0', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
+              <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
+              <span>·</span>
+              <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
+              <span>·</span>
+              <span>© Plates {new Date().getFullYear()}</span>
             </div>
           </div>
         )}
