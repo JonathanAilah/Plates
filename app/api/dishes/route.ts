@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createDish, getDishes, getDish, getSellerDishes, toggleLike, isLiked, updateDishPrice, deleteDish } from '@/lib/db';
+import {
+  createDish, getDishes, getDish, getSellerDishes, toggleLike, isLiked,
+  updateDishPrice, deleteDish, updateDishPhoto, checkGenRateLimit,
+} from '@/lib/db';
+import { generateFoodImage } from '@/lib/imageGen';
+
+// Image generation may take up to ~30 seconds
+export const maxDuration = 60;
 
 export async function GET(request: NextRequest) {
   try {
@@ -40,7 +47,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'toggleLike') {
-      const result = await toggleLike(userId, dishId);
+      await toggleLike(userId, dishId);
       const liked = await isLiked(userId, dishId);
       return NextResponse.json({ liked });
     }
@@ -53,6 +60,38 @@ export async function POST(request: NextRequest) {
     if (action === 'delete') {
       const result = await deleteDish(dishId);
       return NextResponse.json(result);
+    }
+
+    if (action === 'generatePhoto') {
+      // Requires userId (the requesting cook) and dishId
+      if (!userId || !dishId) {
+        return NextResponse.json({ error: 'userId and dishId required' }, { status: 400 });
+      }
+
+      // Load the dish and verify ownership + no existing photo
+      const dish = await getDish(parseInt(dishId));
+      if (!dish) return NextResponse.json({ error: 'Dish not found' }, { status: 404 });
+      if (dish.seller_id !== parseInt(userId)) {
+        return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
+      }
+      if (dish.photo_url) {
+        return NextResponse.json({ error: 'Dish already has a photo' }, { status: 400 });
+      }
+
+      // Rate limit
+      const rl = checkGenRateLimit(parseInt(userId));
+      if (!rl.allowed) {
+        return NextResponse.json({ error: `Please wait ${Math.ceil(rl.retryInMs / 1000)}s`, retryInMs: rl.retryInMs }, { status: 429 });
+      }
+
+      try {
+        const result = await generateFoodImage(dish.name);
+        const updated = await updateDishPhoto(dish.id, result.dataUrl);
+        return NextResponse.json(updated);
+      } catch (err) {
+        console.error('Image generation failed:', err);
+        return NextResponse.json({ error: 'Image generation failed. Try again in a moment.' }, { status: 500 });
+      }
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

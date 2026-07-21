@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles } from 'lucide-react';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 
@@ -246,6 +246,7 @@ export default function Home() {
   const [sending, setSending] = useState(false);
   const [unreadByOrder, setUnreadByOrder] = useState<Record<string, number>>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [generatingPhotoFor, setGeneratingPhotoFor] = useState<number | null>(null);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -696,6 +697,32 @@ export default function Home() {
       setMyDishes(myDishes.map(d => d.id === dishId ? { ...d, price: updated.price } : d));
       setDishes(dishes.map(d => d.id === dishId ? { ...d, price: updated.price } : d));
     } catch (error) { console.error(error); }
+  };
+
+  const generatePhotoForDish = async (dishId: number) => {
+    if (!user || generatingPhotoFor) return;
+    setGeneratingPhotoFor(dishId);
+    try {
+      const res = await fetch('/api/dishes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'generatePhoto', userId: user.id, dishId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Generation failed' }));
+        showToast(err.error || 'Generation failed');
+        return;
+      }
+      const updated = await res.json();
+      setMyDishes(myDishes.map(d => d.id === dishId ? { ...d, photo_url: updated.photo_url } : d));
+      setDishes(dishes.map(d => d.id === dishId ? { ...d, photo_url: updated.photo_url } : d));
+      showToast('Photo generated!');
+    } catch (error) {
+      console.error(error);
+      showToast('Generation failed');
+    } finally {
+      setGeneratingPhotoFor(null);
+    }
   };
 
   const removeDish = async (dishId: number) => {
@@ -1572,32 +1599,44 @@ export default function Home() {
               <div>
                 <div style={{ font: `500 16px ${font.serif}`, color: C.ink, marginBottom: 10 }}>Your menu</div>
                 {myDishes.map(dish => (
-                  <div key={dish.id} style={{ background: C.card, padding: 10, borderRadius: 12, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
-                      <div style={{ width: 40, height: 40, flex: 'none' }}>
-                        <PhotoTile dish={dish} height={40} radius={8} />
-                      </div>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ font: `500 14px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dish.name}</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                          <span style={{ font: `400 12px ${font.sans}`, color: C.muted }}>$</span>
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            defaultValue={dish.price}
-                            onBlur={(e) => {
-                              const val = parseFloat(e.target.value);
-                              if (val > 0 && val !== Number(dish.price)) updatePrice(dish.id, val);
-                            }}
-                            style={{ width: 60, padding: '2px 4px', border: `1px solid ${C.divider}`, borderRadius: 4, font: `500 12px ${font.sans}`, background: '#fff' }}
-                          />
+                  <div key={dish.id} style={{ background: C.card, padding: 10, borderRadius: 12, marginBottom: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+                        <div style={{ width: 40, height: 40, flex: 'none' }}>
+                          <PhotoTile dish={dish} height={40} radius={8} />
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ font: `500 14px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dish.name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                            <span style={{ font: `400 12px ${font.sans}`, color: C.muted }}>$</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              defaultValue={dish.price}
+                              onBlur={(e) => {
+                                const val = parseFloat(e.target.value);
+                                if (val > 0 && val !== Number(dish.price)) updatePrice(dish.id, val);
+                              }}
+                              style={{ width: 60, padding: '2px 4px', border: `1px solid ${C.divider}`, borderRadius: 4, font: `500 12px ${font.sans}`, background: '#fff' }}
+                            />
+                          </div>
                         </div>
                       </div>
+                      <button onClick={() => removeDish(dish.id)} style={{ color: C.terracotta, padding: 4, display: 'flex', alignItems: 'center' }}>
+                        <Trash2 size={16} />
+                      </button>
                     </div>
-                    <button onClick={() => removeDish(dish.id)} style={{ color: C.terracotta, padding: 4, display: 'flex', alignItems: 'center' }}>
-                      <Trash2 size={16} />
-                    </button>
+                    {!dish.photo_url && (
+                      <button
+                        onClick={() => generatePhotoForDish(dish.id)}
+                        disabled={generatingPhotoFor !== null}
+                        style={{ marginTop: 10, width: '100%', padding: '8px 12px', background: generatingPhotoFor === dish.id ? C.cardAlt : C.terracottaLight, color: C.terracotta, borderRadius: 8, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, opacity: generatingPhotoFor && generatingPhotoFor !== dish.id ? 0.5 : 1 }}
+                      >
+                        <Sparkles size={13} />
+                        {generatingPhotoFor === dish.id ? 'Generating… (~15 sec)' : 'Generate photo with AI (~$0.04)'}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

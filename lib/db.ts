@@ -229,6 +229,33 @@ export async function updateDishPrice(id: number, price: number) {
   return result.rows[0];
 }
 
+export async function updateDishPhoto(id: number, photoUrl: string) {
+  const result = await sql`
+    UPDATE dishes SET photo_url = ${photoUrl} WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// In-memory rate limiter for image generation. Not perfect for serverless
+// (per-instance), but a reasonable second line of defense on top of
+// server-side per-user checks. Prevents accidental double-clicks.
+const genAttempts = new Map<number, number>();
+const MIN_INTERVAL_MS = 10000;
+
+export function checkGenRateLimit(userId: number): { allowed: boolean; retryInMs: number } {
+  const now = Date.now();
+  const last = genAttempts.get(userId) || 0;
+  const elapsed = now - last;
+  if (elapsed < MIN_INTERVAL_MS) return { allowed: false, retryInMs: MIN_INTERVAL_MS - elapsed };
+  genAttempts.set(userId, now);
+  return { allowed: true, retryInMs: 0 };
+}
+
+// For seed scripts and other server-side callers where rate limiting doesn't apply
+export function clearGenRateLimit(userId: number) {
+  genAttempts.delete(userId);
+}
+
 export async function deleteDish(id: number) {
   await sql`DELETE FROM dishes WHERE id = ${id}`;
   return { success: true };
