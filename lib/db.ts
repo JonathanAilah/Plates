@@ -27,6 +27,7 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS has_permit BOOLEAN`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS permit_number TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_flags TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_environment TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_hours TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_description TEXT`;
     // Auth columns
@@ -247,6 +248,7 @@ export async function updateCookProfile(id: number, data: {
   hasPermit?: boolean | null;
   permitNumber?: string | null;
   kitchenFlags?: string | null;
+  kitchenEnvironment?: string | null;
   cookingHours?: string | null;
   pickupDescription?: string | null;
 }) {
@@ -258,6 +260,7 @@ export async function updateCookProfile(id: number, data: {
       has_permit = COALESCE(${data.hasPermit ?? null}, has_permit),
       permit_number = COALESCE(${data.permitNumber ?? null}, permit_number),
       kitchen_flags = COALESCE(${data.kitchenFlags ?? null}, kitchen_flags),
+      kitchen_environment = COALESCE(${data.kitchenEnvironment ?? null}, kitchen_environment),
       cooking_hours = COALESCE(${data.cookingHours ?? null}, cooking_hours),
       pickup_description = COALESCE(${data.pickupDescription ?? null}, pickup_description)
     WHERE id = ${id} RETURNING *

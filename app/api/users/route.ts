@@ -93,6 +93,7 @@ export async function POST(request: NextRequest) {
         hasPermit: body.hasPermit,
         permitNumber: body.permitNumber,
         kitchenFlags: body.kitchenFlags,
+        kitchenEnvironment: body.kitchenEnvironment,
         cookingHours: body.cookingHours,
         pickupDescription: body.pickupDescription,
       });

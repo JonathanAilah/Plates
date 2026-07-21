@@ -225,6 +225,7 @@ interface User {
   has_permit: boolean | null;
   permit_number: string | null;
   kitchen_flags: string | null;
+  kitchen_environment: string | null;
   cooking_hours: string | null;
   pickup_description: string | null;
   role: 'user' | 'admin';
@@ -343,6 +344,7 @@ export default function Home() {
   const [cpFlagSmokers, setCpFlagSmokers] = useState(false);
   const [cpFlagNutFree, setCpFlagNutFree] = useState(false);
   const [cpFlagGlutenFree, setCpFlagGlutenFree] = useState(false);
+  const [cpKitchenEnvironment, setCpKitchenEnvironment] = useState<string>('');
   const [cpCookingHours, setCpCookingHours] = useState('');
   const [cpPickupDesc, setCpPickupDesc] = useState('');
   const [cpSaving, setCpSaving] = useState(false);
@@ -1573,6 +1575,7 @@ export default function Home() {
     setCpPermitNumber(user.permit_number || '');
     setCpCookingHours(user.cooking_hours || '');
     setCpPickupDesc(user.pickup_description || '');
+    setCpKitchenEnvironment(user.kitchen_environment || '');
     const flags = (user.kitchen_flags || '').split(',').map(s => s.trim());
     setCpFlagPets(flags.includes('pets'));
     setCpFlagSmokers(flags.includes('smokers'));
@@ -1603,6 +1606,7 @@ export default function Home() {
           hasPermit: cpHasPermit,
           permitNumber: cpPermitNumber || null,
           kitchenFlags: flags || null,
+          kitchenEnvironment: cpKitchenEnvironment || null,
           cookingHours: cpCookingHours || null,
           pickupDescription: cpPickupDesc || null,
         }),
@@ -2989,17 +2993,21 @@ export default function Home() {
               const total = 7;
               const pct = Math.round((filled / total) * 100);
               const complete = filled === total;
+              const approved = user.seller_status === 'approved';
+              const showGreen = complete && approved;
               return (
-                <div onClick={openCookProfile} style={{ cursor: 'pointer', background: complete ? C.greenLight : C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 42, height: 42, borderRadius: 12, background: complete ? C.green : C.cardAlt, color: complete ? '#fff' : C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                <div onClick={openCookProfile} style={{ cursor: 'pointer', background: showGreen ? C.greenLight : C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, background: showGreen ? C.green : C.cardAlt, color: showGreen ? '#fff' : C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
                     <ChefHat size={20} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ font: `500 15px ${font.serif}`, color: complete ? C.green : C.ink }}>
-                      {complete ? 'Kitchen profile complete' : 'Complete your kitchen profile'}
+                    <div style={{ font: `500 15px ${font.serif}`, color: showGreen ? C.green : C.ink }}>
+                      {complete ? 'Kitchen details filled in' : 'Complete your kitchen profile'}
                     </div>
-                    <div style={{ font: `400 11.5px ${font.sans}`, color: complete ? C.green : C.muted, marginTop: 2 }}>
-                      {complete ? 'Buyers see all your details' : `${filled} of ${total} sections done · ${pct}%`}
+                    <div style={{ font: `400 11.5px ${font.sans}`, color: showGreen ? C.green : C.muted, marginTop: 2 }}>
+                      {complete
+                        ? (approved ? 'Buyers can see your kitchen' : 'Waiting on admin approval to go live')
+                        : `${filled} of ${total} sections done · ${pct}%`}
                     </div>
                     {!complete && (
                       <div style={{ marginTop: 8, height: 4, borderRadius: 2, background: C.cardAlt, overflow: 'hidden' }}>
@@ -3007,7 +3015,7 @@ export default function Home() {
                       </div>
                     )}
                   </div>
-                  <div style={{ color: complete ? C.green : C.terracotta, font: `500 12px ${font.sans}`, flex: 'none' }}>{complete ? 'Edit' : 'Set up ›'}</div>
+                  <div style={{ color: showGreen ? C.green : C.terracotta, font: `500 12px ${font.sans}`, flex: 'none' }}>{complete ? 'Edit' : 'Set up ›'}</div>
                 </div>
               );
             })()}
@@ -3204,8 +3212,32 @@ export default function Home() {
             </div>
 
             <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Kitchen environment</div>
-              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>Shown to buyers on your dishes so they can decide what's right for them.</div>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Where do you cook?</div>
+              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>Buyers see this so they know the environment your food comes from.</div>
+              {[
+                'Home kitchen',
+                'Commercial kitchen',
+                'Community kitchen',
+                'Outdoor BBQ',
+                'Food cart',
+                'Food truck',
+              ].map(opt => (
+                <div
+                  key={opt}
+                  onClick={() => setCpKitchenEnvironment(cpKitchenEnvironment === opt ? '' : opt)}
+                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: C.surface, borderRadius: 10, marginBottom: 8, border: cpKitchenEnvironment === opt ? `2px solid ${C.green}` : `2px solid transparent` }}
+                >
+                  <div style={{ width: 22, height: 22, borderRadius: 11, background: cpKitchenEnvironment === opt ? C.green : '#fff', border: `2px solid ${cpKitchenEnvironment === opt ? C.green : C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', color: '#fff' }}>
+                    {cpKitchenEnvironment === opt ? '●' : ''}
+                  </div>
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>{opt}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Kitchen conditions</div>
+              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>Buyers with allergies or preferences use these to decide what&apos;s right for them.</div>
 
               {[
                 { key: 'pets', label: 'Pets in the home', state: cpFlagPets, set: setCpFlagPets },

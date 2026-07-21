@@ -1,86 +1,84 @@
-# Plates — Public cook profiles
+# Plates — Kitchen profile fixes
 
-Every approved cook now has a public shareable page. Tap a cook's name/avatar anywhere and their profile opens.
+Fixes to the kitchen profile flow and adds "Where do you cook?" environment selector.
 
 ## What changed
 
-**New public page: `/cook/[id]`**
-Server-rendered, no auth required. Shareable URL that opens directly to a cook. Anyone with the link (even not signed in) sees the cook's page.
+**1. "Kitchen profile complete" text no longer misleads.**
+Before: filling in all 7 sections turned the card green and said "Kitchen profile complete · Buyers see all your details" — but if you were still pending approval, that was wrong.
 
-**What's on the profile:**
-- Cook photo, kitchen name, real name (if different)
-- Aggregate star rating across all their dishes ("★ 4.8 · 12 reviews")
-- Bio (if set)
-- Kitchen tags (nut-free, gluten-free, etc)
-- Pickup description (freeform text)
-- "Member since [month year]"
-- Full menu — all their currently-posted, non-hidden dishes, with rating chips and prices. Featured dishes get a gold FEATURED badge.
-- Recent community feed posts from the cook (active in last 24hr) — read-only view
+After: the card shows green ONLY when both filled AND approved.
+- If not approved yet: "Kitchen details filled in · Waiting on admin approval to go live" (neutral tone, not green)
+- If approved: "Kitchen details filled in · Buyers can see your kitchen" (green)
+- If partial: "Complete your kitchen profile · X of 7 sections done"
 
-**Tap-to-open links from everywhere:**
-- Dish row on Discover → tapping the cook's name/avatar opens their profile (doesn't open the meal detail — click stopped)
-- Meal detail page → seller card is now a link, with "View profile →" hint
-- The main body of the dish card still opens the meal like before
+**2. New "Where do you cook?" section (single-select).**
+Options:
+- Home kitchen
+- Commercial kitchen
+- Community kitchen
+- Outdoor BBQ
+- Food cart
+- Food truck
 
-**Dish visibility controls (schema + API only):**
-- New columns `dishes.is_featured` and `dishes.is_hidden_from_profile`
-- API supports `setFeatured` and `setHidden` actions
-- **NOT yet exposed in the Kitchen dashboard UI** — this is a small follow-up. Cooks can't toggle these yet from the app, only via SQL if they want to test.
+Only ONE can be selected — cooks don't cook from a home kitchen AND a food truck at the same time. Stored in a new `users.kitchen_environment` column.
 
-**404 for non-approved cooks.**
-Only cooks with `seller_status = 'approved'` AND `account_disabled = false` are visible. Everyone else gets a 404 page, even by direct URL.
+**3. Existing kitchen flags renamed "Kitchen conditions" for clarity.**
+Still multi-select. Still contains: Pets in the home, Smokers in the home, Nut-free kitchen, Gluten-free kitchen.
 
-**SEO metadata.**
-Each cook page has a proper `<title>` and description tag. Sharing on social will show "Cook Name · Plates" and their bio.
+## Admin approval is already working correctly
+
+Verified: `getDishes()` filters `WHERE u.seller_status = 'approved'` — pending cooks' dishes do NOT appear on Discover. Dish creation is also blocked server-side unless approved. The approval chain is fully enforced.
+
+## How admins log in
+
+Same as regular users — via Clerk email/password or Google. The difference is what happens AFTER sign-in: if your Postgres user record has `role = 'admin'`, the shield icon appears on Discover.
+
+**To promote yourself to admin, run this SQL in Neon:**
+```sql
+UPDATE users SET role = 'admin' WHERE clerk_user_id = 'YOUR_CLERK_USER_ID';
+```
+
+To find your clerk_user_id first:
+```sql
+SELECT id, name, email, clerk_user_id FROM users ORDER BY id DESC LIMIT 5;
+```
+
+Sign out and back in after running the update. The shield icon appears on the Discover header, tap it to enter admin.
+
+## About ID + W-9 collection
+
+**I pushed back on this feature and want to explain why:**
+
+You asked to have the kitchen profile ask for a driver's license and link to a W-9 form. Both are legally sensitive and I don't recommend building this into the kitchen profile directly.
+
+**Why:**
+- **Storing ID means storing PII.** You'd take on legal obligations under GDPR, CCPA, and state privacy laws. You'd need encryption at rest, access audits, retention policies. You'd become an attractive target for identity theft attacks.
+- **W-9s are Stripe's job.** W-9s are the US tax form platforms collect from contractors so they can issue 1099-NECs at year-end for payouts. When we build Stripe Connect Express (the next Tier-1 feature), cooks will complete their W-9 as part of Stripe's onboarding, Stripe stores it, and Stripe automatically generates their 1099s. Duplicating that work in your own system means doing it worse than Stripe would.
+- **Duplication of KYC.** Stripe Connect requires government ID upload as part of their Know Your Customer process. Collecting IDs before Stripe means collecting them twice.
+
+**My recommendation:** wait until we build payments (next tier-1 feature) and do all identity + tax collection through Stripe. When a cook is approved by an admin, they then complete Stripe onboarding, which handles ID verification and W-9 in one flow, hosted and secured by Stripe.
+
+If you disagree and still want to collect ID/W-9 directly, we can do it, but I'd want to do it after we've talked through the storage requirements (dedicated encrypted table, no base64 in Postgres, admin-only access with audit logs, retention policy of 7 years for tax purposes).
 
 ## Files
 
-- `lib/db.ts` — new columns, `getCookPublicProfile`, `updateDishFeatured`, `updateDishHidden`
-- `app/api/cooks/[id]/route.ts` — NEW public endpoint (no auth)
-- `app/api/dishes/route.ts` — new `setFeatured` + `setHidden` actions
-- `app/cook/[id]/page.tsx` — NEW server-rendered page
-- `app/cook/[id]/CookProfileView.tsx` — NEW client component (styling)
-- `app/page.tsx` — Dish interface expanded, tappable cook links added
+- `lib/db.ts` — new `kitchen_environment` column + updateCookProfile accepts it
+- `app/api/users/route.ts` — pass kitchenEnvironment through
+- `app/page.tsx` — new "Where do you cook?" section, softened completion card wording
 
 ## Install
 
 1. Extract this zip.
-2. Copy everything into your local repo — 3 new folders (`app/cook`, `app/api/cooks`, and its subfolder).
-3. GitHub Desktop should show these as new files + a few modifications.
-4. Commit: `Add public cook profile pages`
-5. Push origin — Vercel auto-deploys.
-
-Schema migrations run on next app load.
+2. Copy files into your local repo, overwriting.
+3. Commit: `Fix kitchen profile wording + add kitchen environment selector`
+4. Push origin — Vercel auto-deploys.
+5. To make yourself admin: run the SQL above in Neon SQL Editor.
 
 ## What to test
 
-**As anyone:**
-1. On Discover, tap the cook's name (not the dish card body) on any dish row → cook profile opens.
-2. On a meal detail page, tap the seller card at the bottom → cook profile opens.
-3. On the profile, tap any dish → returns to main app on the meal detail (via `/?dish=id` link — note: this navigates but doesn't yet auto-open the meal, so you'll land on Discover).
-4. Share the URL with someone — even without signing in, they can view.
-
-**As an anonymous user:**
-1. Sign out. Visit `plates-g9u9.vercel.app/cook/2` (or whichever id).
-2. Full profile should load with no sign-in required.
-
-**Try to break it:**
-1. Visit `/cook/999999` — should 404.
-2. Visit a pending cook's profile — should 404.
-3. Visit your own admin/user (not-a-seller) profile — should 404.
-
-## What was NOT built
-
-- **Kitchen dashboard UI for featuring/hiding dishes.** Schema and API are ready. To use them, cooks would need buttons on their menu list. This is a ~1 hour follow-up.
-- **Profile edit surface.** The bio and pickup description are already editable via existing Kitchen profile flows.
-- **"Order from this cook" button on the profile page.** Buyers can tap a dish to view/order.
-- **Following/subscribing to cooks.** Deliberate — you said no followers, proximity-first.
-- **Direct message from profile.** Messaging is order-scoped in our system; not a cook-level channel.
-- **Automatic open-meal deep link from profile.** Right now `/cook/5` links dishes as `/?dish=id`, which loads the app but doesn't jump to the meal. Fixable with a `useSearchParams` handler in `page.tsx` — small follow-up.
-
-## Design decisions
-
-- **Separate page, not in-app screen**: real public URLs, real SEO, real sharing. Trade-off: navigating away loses in-app scroll/state, but cart is DB-backed so it survives.
-- **Community posts on profile are read-only**: reacting/commenting from here would require duplicating a lot of state and gating on anon users. Feed tab is the interactive surface.
-- **Featured dishes sort first**: `ORDER BY d.is_featured DESC, d.created_at DESC`. Cooks can pin what they want to highlight.
-- **Only approved cooks show**: consistent with how the marketplace already gates the feed.
+1. Sign in. Go to Cook → Kitchen profile.
+2. Scroll to "Where do you cook?" — pick one. Tap same one again to unselect.
+3. Save. Go back to Kitchen. If you're pending, the completion card should NOT be green.
+4. Admin approves you (via `plates-g9u9.vercel.app` on your admin browser).
+5. Refresh — completion card is now green with "Buyers can see your kitchen".
