@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed": "tsx scripts/seed-mockup-dishes.ts"
+    "seed": "tsx --env-file=.env.local scripts/seed-mockup-dishes.ts"
   },
   "dependencies": {
     "@vercel/blob": "^0.27.0",

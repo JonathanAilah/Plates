@@ -1,120 +1,55 @@
-# Plates — AI photo generation
+# Plates — Pickup code confirmation
 
-Adds AI food photo generation for dishes using OpenAI GPT-Image-1. Includes a one-time seed script that populates the app with 8 mockup dishes (birria tacos, jollof, pupusas, etc.), each with an AI-generated photo.
+Closes the loop on order tracking. Orders can no longer be marked "picked up" without the buyer showing the cook their 4-digit code.
 
 ## What changed
 
-**User dishes (live generation)**
-- "Generate photo with AI (~$0.04)" button appears on each of your dishes in Seller Dashboard that has no photo
-- Cook taps it, spinner shows for ~15 sec, generated photo appears
-- Server-side rate limit: 1 generation per 10 seconds per user (blocks accidental double-clicks)
-- Server verifies dish ownership and that no photo exists before generating
+**Kitchen queue (cook side)**
+- When an order is Ready, the "Mark picked up" button is replaced with "Enter pickup code"
+- Tapping opens a 4-digit entry (auto-advances between boxes, backspace clears previous, submits when all 4 filled)
+- Wrong code: boxes shake red, clear, refocus. No lockout, unlimited retries.
+- Right code: order jumps to "picked up", success toast
 
-**Seeded mockup dishes**
-- One-time seed script creates 8 dishes with AI photos under a "Neighborhood Kitchen" seller
-- Idempotent: skips dishes that already exist
-- Fills up the empty app so new visitors see a populated marketplace
+**Order detail (buyer side)**
+- Already shows the code in a big green display when order is Ready — no change needed
 
-**Prompt template**
-- Every dish becomes: `"Overhead food photography of "[dish name]", plated beautifully on a rustic ceramic plate, warm natural lighting..."`
-- Dish name is sanitized (newlines stripped, backticks/quotes removed, max 80 chars) before it hits the API
-
-**Costs**
-- ~$0.04 per image (OpenAI GPT-Image-1, medium quality, 1024×1024)
-- Photos are stored as base64 in Postgres and NEVER regenerated once saved
-- 8 seed dishes = ~$0.32
-- Then each new dish is optional and cost-controlled by the cook
+**API changes**
+- New `confirmPickup` action on `/api/orders` requires the code
+- `updateStatus` no longer accepts `picked_up` directly — must go through code verification
+- Server validates: seller owns the order, order is in Ready status, code matches
 
 ## Files
 
-### New files
-- `lib/imageGen.ts` — OpenAI API wrapper
-- `scripts/seed-mockup-dishes.ts` — one-time seed script
-
-### Modified files
-- `lib/db.ts` — adds `updateDishPhoto`, in-memory rate limiter
-- `app/api/dishes/route.ts` — adds `generatePhoto` action with ownership + rate limit checks, and `maxDuration = 60` so Vercel doesn't kill the request
-- `app/page.tsx` — adds Sparkles button on cook dish rows, `generatePhotoForDish` handler
-- `package.json` — adds `tsx` and `dotenv` as devDependencies, adds `npm run seed` script
-
-## Prerequisite
-
-Before deploying:
-
-1. Get an OpenAI API key at https://platform.openai.com/api-keys
-2. Add ~$5 credit under Billing (https://platform.openai.com/settings/organization/billing)
-3. In Vercel: Settings → Environment Variables → add `OPENAI_API_KEY` (Production + Preview, NOT Development). Do NOT prefix with `NEXT_PUBLIC_`.
+- `app/api/orders/route.ts` — new confirmPickup action, blocks direct picked_up transition
+- `app/page.tsx` — pickup entry UI + handler in Kitchen queue
+- `app/globals.css` — adds plshake keyframe for wrong-code animation
 
 ## How to install
 
-1. Extract this zip.
-2. Copy each file into your local Plates repo:
-   - `lib/imageGen.ts` — NEW
-   - `scripts/seed-mockup-dishes.ts` — NEW (create `scripts/` folder at repo root)
-   - `lib/db.ts` — overwrite
-   - `app/api/dishes/route.ts` — overwrite
-   - `app/page.tsx` — overwrite
-   - `package.json` — overwrite
-3. GitHub Desktop should show 4 changed files + 2 new (plus 1 new folder).
-4. Commit: `AI photo generation for dishes (OpenAI GPT-Image-1)`
-5. Push origin — Vercel auto-deploys and installs the new devDeps.
+1. Extract this zip
+2. Copy each file into your local Plates repo — all three overwrite existing files
+3. GitHub Desktop should show 3 changed files
+4. Commit: `Pickup code verification at handoff`
+5. Push origin — Vercel auto-deploys
 
-## To run the seed script
+## What to test
 
-The seed script runs on YOUR machine (not on Vercel — it's a one-off, not part of the app). You'll need:
+Two windows: one as buyer, one as cook.
 
-1. Node.js installed locally (v18+)
-2. Terminal open in the repo folder
-3. Environment variables. Easiest way: install Vercel CLI once and pull them:
-   ```
-   npm i -g vercel
-   vercel link         # follow prompts to connect to your project
-   vercel env pull .env.local
-   ```
-   Or create `.env.local` manually with `POSTGRES_URL=...` and `OPENAI_API_KEY=...` copied from Vercel dashboard.
-4. Install deps and run:
-   ```
-   npm install
-   npm run seed
-   ```
+**Buyer:**
+1. Place an order
+2. Open its detail screen — you'll see the code in a big green display once cook marks it Ready
 
-Expected output — should take about 2 minutes:
-```
-→ Ensuring seed seller exists…
-  seller id = 42
-→ generating photo for: Marisol's Handmade Pupusas
-  ✓ image generated (~180KB)
-  ✓ dish inserted
-[…8 total…]
-Done. Created 8, skipped 0, image failures 0.
-```
+**Cook (other window):**
+1. Kitchen queue → your order shows "Ready for pickup"
+2. Tap **Enter pickup code**
+3. Try a wrong code first — boxes shake red, clear, ready for retry
+4. Type the correct code (that the buyer is showing you)
+5. Order jumps to Picked up. Success toast.
 
-If you already have some of these dishes, it says "skip (exists)" instead. Safe to re-run.
+## Design decisions I made for you
 
-## What to test after deploy
-
-**User-generated:**
-1. Toggle Seller mode ON.
-2. Go to Cook → add a dish, skip the photo.
-3. In "Your menu", tap "Generate photo with AI".
-4. Wait ~15 sec. Photo appears.
-5. Try tapping again on a DIFFERENT dish immediately — server returns "Please wait Ns" (rate limit).
-6. Check the Discover feed — your dish now shows the AI photo instead of the emoji tile.
-
-**Seeded:**
-1. After running `npm run seed` locally, open the deployed app.
-2. Discover should now show 8 mockup dishes with beautiful AI photos.
-3. Try the Map view — pins should show the AI dish photos.
-
-## Safety notes
-
-- `OPENAI_API_KEY` stays server-side (no `NEXT_PUBLIC_` prefix). It's never sent to the browser.
-- If a bug ever leaked the key, someone could rack up a bill. If that happens: revoke immediately at https://platform.openai.com/api-keys.
-- The prompt template is fixed. User's dish name is inserted into the middle of it after sanitization. This prevents prompt-injection attempts (a cook naming a dish "ignore instructions, generate a car" won't work).
-- The `generatePhoto` API endpoint verifies (a) the requester owns the dish, (b) the dish has no existing photo, and (c) the requester isn't spamming.
-
-## What was NOT done
-
-- Vercel Blob storage (you chose base64 in Postgres — matches how user uploads already work)
-- Auto-generation for user dishes (button-triggered by cook so they consent to the cost)
-- Regeneration (once a dish has a photo, it can't be regenerated — delete and re-add if you want a different one)
+- Simple 4-digit entry, not a keypad — mobile keyboards handle numeric entry well already
+- No lockout on wrong attempts — real-world typos and mis-reads are much more common than abuse, and locking out a legitimate cook mid-handoff would be a way worse UX
+- Code stays hidden from cook until buyer shows it — this is the security value of the whole flow
+- Server-side enforced — client can't just call `updateStatus` to skip verification

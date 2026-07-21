@@ -247,6 +247,11 @@ export default function Home() {
   const [unreadByOrder, setUnreadByOrder] = useState<Record<string, number>>({});
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [generatingPhotoFor, setGeneratingPhotoFor] = useState<number | null>(null);
+  const [confirmingPickupFor, setConfirmingPickupFor] = useState<string | null>(null);
+  const [pickupCodeInput, setPickupCodeInput] = useState<string[]>(['', '', '', '']);
+  const [pickupCodeError, setPickupCodeError] = useState(false);
+  const [pickupCodeSubmitting, setPickupCodeSubmitting] = useState(false);
+  const pickupInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -697,6 +702,89 @@ export default function Home() {
       setMyDishes(myDishes.map(d => d.id === dishId ? { ...d, price: updated.price } : d));
       setDishes(dishes.map(d => d.id === dishId ? { ...d, price: updated.price } : d));
     } catch (error) { console.error(error); }
+  };
+
+  const confirmPickupWithCode = async (orderId: string, code: string) => {
+    if (!user || code.length !== 4) return;
+    setPickupCodeSubmitting(true);
+    setPickupCodeError(false);
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'confirmPickup',
+          orderId,
+          sellerId: user.id,
+          pickupCode: code,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.codeMismatch) {
+          // Trigger shake animation + clear inputs
+          setPickupCodeError(true);
+          setPickupCodeInput(['', '', '', '']);
+          setTimeout(() => {
+            setPickupCodeError(false);
+            pickupInputRefs.current[0]?.focus();
+          }, 500);
+        } else {
+          showToast(data.error || 'Could not confirm pickup');
+          setConfirmingPickupFor(null);
+        }
+        return;
+      }
+      // Success — close the entry and refresh
+      setConfirmingPickupFor(null);
+      setPickupCodeInput(['', '', '', '']);
+      showToast('Pickup confirmed');
+      await loadCookOrders(user.id);
+    } catch (e) {
+      console.error('Confirm pickup error:', e);
+      showToast('Network error');
+    } finally {
+      setPickupCodeSubmitting(false);
+    }
+  };
+
+  const openPickupConfirmation = (orderId: string) => {
+    setConfirmingPickupFor(orderId);
+    setPickupCodeInput(['', '', '', '']);
+    setPickupCodeError(false);
+    // Focus first input after render
+    setTimeout(() => pickupInputRefs.current[0]?.focus(), 50);
+  };
+
+  const handlePickupDigit = (index: number, value: string, orderId: string) => {
+    // Only digits
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const next = [...pickupCodeInput];
+    next[index] = digit;
+    setPickupCodeInput(next);
+
+    if (digit && index < 3) {
+      // Auto-advance
+      pickupInputRefs.current[index + 1]?.focus();
+    }
+
+    // Auto-submit when 4 digits filled
+    if (index === 3 && digit) {
+      const code = next.join('');
+      if (code.length === 4) {
+        confirmPickupWithCode(orderId, code);
+      }
+    }
+  };
+
+  const handlePickupKey = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !pickupCodeInput[index] && index > 0) {
+      // Backspace on empty box → go back and clear previous
+      const next = [...pickupCodeInput];
+      next[index - 1] = '';
+      setPickupCodeInput(next);
+      pickupInputRefs.current[index - 1]?.focus();
+    }
   };
 
   const generatePhotoForDish = async (dishId: number) => {
@@ -1963,29 +2051,75 @@ export default function Home() {
                       </div>
 
                       {!isDone && (
-                        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                          {o.status === 'placed' && (
-                            <>
-                              <button onClick={() => updateOrderStatus(o.id, 'cancelled')} style={{ flex: 1, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Decline</button>
-                              <button onClick={() => updateOrderStatus(o.id, 'accepted')} style={{ flex: 2, background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Accept order</button>
-                            </>
-                          )}
-                          {o.status === 'accepted' && (
-                            <button onClick={() => updateOrderStatus(o.id, 'cooking')} style={{ flex: 1, background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Start cooking</button>
-                          )}
-                          {o.status === 'cooking' && (
-                            <button onClick={() => updateOrderStatus(o.id, 'ready')} style={{ flex: 1, background: C.green, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Mark ready</button>
-                          )}
-                          {o.status === 'ready' && (
-                            <button onClick={() => updateOrderStatus(o.id, 'picked_up')} style={{ flex: 1, background: C.ink, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Mark picked up</button>
-                          )}
-                          <button onClick={() => openChatAsCook(o)} style={{ position: 'relative', width: 40, height: 40, borderRadius: 10, background: C.terracottaLight, color: C.terracotta, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
-                            <MessageCircle size={16} />
-                            {unreadByOrder[o.id] > 0 && (
-                              <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: C.terracotta, color: '#fff', font: `500 10px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${C.card}` }}>{unreadByOrder[o.id]}</span>
+                        confirmingPickupFor === o.id ? (
+                          <div style={{ marginTop: 12 }}>
+                            <div style={{ font: `500 12px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>
+                              Ask the buyer for their 4-digit pickup code:
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', animation: pickupCodeError ? 'plshake .4s ease' : undefined }}>
+                              {[0, 1, 2, 3].map(i => (
+                                <input
+                                  key={i}
+                                  ref={(el) => { pickupInputRefs.current[i] = el; }}
+                                  type="text"
+                                  inputMode="numeric"
+                                  maxLength={1}
+                                  value={pickupCodeInput[i]}
+                                  onChange={(e) => handlePickupDigit(i, e.target.value, o.id)}
+                                  onKeyDown={(e) => handlePickupKey(i, e)}
+                                  disabled={pickupCodeSubmitting}
+                                  style={{
+                                    width: 48,
+                                    height: 56,
+                                    borderRadius: 12,
+                                    border: `2px solid ${pickupCodeError ? '#c94b4b' : (pickupCodeInput[i] ? C.terracotta : C.divider)}`,
+                                    background: '#fff',
+                                    textAlign: 'center',
+                                    font: `600 22px ${font.serif}`,
+                                    color: pickupCodeError ? '#c94b4b' : C.ink,
+                                    outline: 'none',
+                                  }}
+                                />
+                              ))}
+                            </div>
+                            {pickupCodeError && (
+                              <div style={{ marginTop: 8, textAlign: 'center', font: `500 12px ${font.sans}`, color: '#c94b4b' }}>
+                                Wrong code. Try again.
+                              </div>
                             )}
-                          </button>
-                        </div>
+                            <button
+                              onClick={() => { setConfirmingPickupFor(null); setPickupCodeError(false); }}
+                              disabled={pickupCodeSubmitting}
+                              style={{ marginTop: 12, width: '100%', background: 'transparent', color: C.muted, font: `500 12px ${font.sans}`, padding: 8 }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                            {o.status === 'placed' && (
+                              <>
+                                <button onClick={() => updateOrderStatus(o.id, 'cancelled')} style={{ flex: 1, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Decline</button>
+                                <button onClick={() => updateOrderStatus(o.id, 'accepted')} style={{ flex: 2, background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Accept order</button>
+                              </>
+                            )}
+                            {o.status === 'accepted' && (
+                              <button onClick={() => updateOrderStatus(o.id, 'cooking')} style={{ flex: 1, background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Start cooking</button>
+                            )}
+                            {o.status === 'cooking' && (
+                              <button onClick={() => updateOrderStatus(o.id, 'ready')} style={{ flex: 1, background: C.green, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Mark ready</button>
+                            )}
+                            {o.status === 'ready' && (
+                              <button onClick={() => openPickupConfirmation(o.id)} style={{ flex: 1, background: C.ink, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Enter pickup code</button>
+                            )}
+                            <button onClick={() => openChatAsCook(o)} style={{ position: 'relative', width: 40, height: 40, borderRadius: 10, background: C.terracottaLight, color: C.terracotta, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                              <MessageCircle size={16} />
+                              {unreadByOrder[o.id] > 0 && (
+                                <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: C.terracotta, color: '#fff', font: `500 10px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${C.card}` }}>{unreadByOrder[o.id]}</span>
+                              )}
+                            </button>
+                          </div>
+                        )
                       )}
                     </div>
                   );
