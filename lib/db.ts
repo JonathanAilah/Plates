@@ -20,6 +20,7 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS prep_address TEXT`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dishes (
@@ -111,6 +112,14 @@ export async function updateUserSeller(id: number, isSeller: boolean) {
 export async function updateUserLocation(id: number, latitude: number, longitude: number) {
   const result = await sql`
     UPDATE users SET latitude = ${latitude}, longitude = ${longitude} WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function updateUserAddress(id: number, address: string, latitude: number, longitude: number) {
+  const result = await sql`
+    UPDATE users SET prep_address = ${address}, latitude = ${latitude}, longitude = ${longitude}
+    WHERE id = ${id} RETURNING *
   `;
   return result.rows[0];
 }

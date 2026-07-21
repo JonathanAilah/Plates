@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2 } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation } from 'lucide-react';
+import MapView from '@/components/MapView';
+import AddressAutocomplete from '@/components/AddressAutocomplete';
 
 interface Dish {
   id: number;
@@ -58,6 +60,7 @@ interface User {
   photo_url: string | null;
   latitude: number | null;
   longitude: number | null;
+  prep_address: string | null;
 }
 
 function distanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -106,6 +109,7 @@ async function uploadImage(file: File): Promise<string | null> {
   });
 }
 
+// Design tokens matching the mockup
 const C = {
   page: '#eae4d9',
   surface: '#f7f3ec',
@@ -152,6 +156,7 @@ export default function Home() {
   const [tipEditing, setTipEditing] = useState(false);
   const [pickupTiming, setPickupTiming] = useState<'asap' | 'schedule'>('asap');
   const [toast, setToast] = useState<string | null>(null);
+  const [feedView, setFeedView] = useState<'list' | 'map'>('list');
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -503,6 +508,22 @@ export default function Home() {
     );
   };
 
+  const saveAddress = async (address: string, latitude: number, longitude: number) => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateAddress', id: user.id, address, latitude, longitude }),
+      });
+      const updated = await res.json();
+      setUser(updated);
+      showToast('Kitchen address saved');
+    } catch (error) {
+      console.error('Save address error:', error);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.page, color: C.muted }}>
@@ -519,6 +540,7 @@ export default function Home() {
   const heroDish = dishes[0] || null;
   const otherDishes = dishes.slice(heroDish ? 1 : 0);
 
+  // Photo tile: uses real photo_url if present, else emoji on the striped placeholder
   const PhotoTile = ({ dish, height, radius }: { dish: { photo_url: string | null; emoji: string; name: string }, height: number | string, radius: number }) => {
     if (dish.photo_url) {
       return (
@@ -550,6 +572,7 @@ export default function Home() {
     <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
       <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative' }}>
 
+        {/* ================= DISCOVER ================= */}
         {screen === 'feed' && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
             <div style={{ padding: '20px 20px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -601,47 +624,81 @@ export default function Home() {
               </div>
             )}
 
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
               <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>Fresh from the block</div>
-              {dishes.length === 0 && (
-                <div style={{ font: `400 12px ${font.sans}`, color: C.muted }}>No dishes yet</div>
-              )}
+              <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
+                <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  List
+                </button>
+                <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  Map
+                </button>
+              </div>
             </div>
 
-            <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {otherDishes.map(dish => {
-                const dist = (user.latitude != null && user.longitude != null && dish.seller_latitude != null && dish.seller_longitude != null)
-                  ? distanceMiles(user.latitude, user.longitude, dish.seller_latitude, dish.seller_longitude)
-                  : null;
-                return (
-                  <div key={dish.id} onClick={() => openMeal(dish)} style={{ cursor: 'pointer', background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
-                    <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
-                      <PhotoTile dish={dish} height={96} radius={13} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                        <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
-                        <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
-                        {dish.seller_photo_url ? (
-                          <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
-                        ) : (
-                          <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
-                        )}
-                        {dish.seller_name}
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
-                        {dist !== null && (
-                          <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `${dist.toFixed(1)} mi`} · {etaMinutes(dist)} min</span>
-                        )}
-                        <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
-                      </div>
-                    </div>
+            {dishes.length === 0 && (
+              <div style={{ padding: '0 20px 8px', font: `400 12px ${font.sans}`, color: C.muted }}>No dishes yet</div>
+            )}
+
+            {feedView === 'map' ? (
+              <div style={{ padding: '0 20px 8px' }}>
+                <MapView
+                  height={380}
+                  radius={18}
+                  userLat={user.latitude}
+                  userLng={user.longitude}
+                  pins={dishes
+                    .filter(d => d.seller_latitude != null && d.seller_longitude != null)
+                    .map(d => ({
+                      id: d.id,
+                      lat: d.seller_latitude!,
+                      lng: d.seller_longitude!,
+                      label: `$${Number(d.price).toFixed(0)}`,
+                      onClick: () => openMeal(d),
+                    }))}
+                />
+                {dishes.filter(d => d.seller_latitude != null).length === 0 && dishes.length > 0 && (
+                  <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
+                    No cooks have shared a location yet. Ask cooks to enable location in their kitchen setup.
                   </div>
-                );
-              })}
-            </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {otherDishes.map(dish => {
+                  const dist = (user.latitude != null && user.longitude != null && dish.seller_latitude != null && dish.seller_longitude != null)
+                    ? distanceMiles(user.latitude, user.longitude, dish.seller_latitude, dish.seller_longitude)
+                    : null;
+                  return (
+                    <div key={dish.id} onClick={() => openMeal(dish)} style={{ cursor: 'pointer', background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
+                      <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
+                        <PhotoTile dish={dish} height={96} radius={13} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                          <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                          <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
+                          {dish.seller_photo_url ? (
+                            <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
+                          ) : (
+                            <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
+                          )}
+                          {dish.seller_name}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
+                          {dist !== null && (
+                            <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `${dist.toFixed(1)} mi`} · {etaMinutes(dist)} min</span>
+                          )}
+                          <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             <div style={{ padding: '18px 20px 26px' }}>
               <div onClick={toggleSellerMode} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -655,6 +712,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= MEAL DETAIL ================= */}
         {screen === 'meal' && selectedDish && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
             <div style={{ position: 'relative' }}>
@@ -711,6 +769,37 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+
+              {selectedDish.seller_latitude != null && selectedDish.seller_longitude != null && (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 10 }}>Pickup location</div>
+                  <MapView
+                    height={180}
+                    radius={14}
+                    centerLat={selectedDish.seller_latitude}
+                    centerLng={selectedDish.seller_longitude}
+                    userLat={user.latitude}
+                    userLng={user.longitude}
+                    pins={[{
+                      id: selectedDish.id,
+                      lat: selectedDish.seller_latitude,
+                      lng: selectedDish.seller_longitude,
+                    }]}
+                    zoom={14}
+                    interactive={false}
+                  />
+                  <button
+                    onClick={() => {
+                      const dest = `${selectedDish.seller_latitude},${selectedDish.seller_longitude}`;
+                      const url = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+                      window.open(url, '_blank');
+                    }}
+                    style={{ marginTop: 10, width: '100%', background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 12, padding: 12, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                  >
+                    <Navigation size={15} /> Get directions
+                  </button>
+                </div>
+              )}
             </div>
 
             <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, padding: '14px 22px 20px', boxShadow: '0 -6px 20px rgba(60,40,20,.07)', display: 'flex', alignItems: 'center', gap: 12, maxWidth: 430, margin: '0 auto' }}>
@@ -730,6 +819,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= CART ================= */}
         {screen === 'cart' && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
             <div style={{ padding: '20px 22px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -860,6 +950,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= NOTIFICATIONS ================= */}
         {screen === 'notifications' && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
@@ -885,6 +976,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= PROFILE (kept from before, restyled minimally) ================= */}
         {screen === 'profile' && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
@@ -945,6 +1037,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= SELLER DASHBOARD ================= */}
         {screen === 'seller-dashboard' && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
@@ -955,10 +1048,27 @@ export default function Home() {
             </div>
 
             <div style={{ background: C.card, padding: 16, borderRadius: 14, marginBottom: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-              <p style={{ font: `400 13px ${font.sans}`, color: C.inkSoft }}>You're selling {myDishes.length} {myDishes.length === 1 ? 'dish' : 'dishes'}</p>
-              {user.latitude == null && (
+              <p style={{ font: `400 13px ${font.sans}`, color: C.inkSoft, marginBottom: 12 }}>You're selling {myDishes.length} {myDishes.length === 1 ? 'dish' : 'dishes'}</p>
+
+              <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <MapPin size={13} /> Kitchen address
+              </div>
+              {user.prep_address ? (
+                <div style={{ background: C.greenLight, borderRadius: 10, padding: '10px 12px', font: `400 13px ${font.sans}`, color: C.green, marginBottom: 8 }}>
+                  {user.prep_address}
+                </div>
+              ) : null}
+              <AddressAutocomplete
+                onSelect={(r) => saveAddress(r.address, r.latitude, r.longitude)}
+                placeholder={user.prep_address ? 'Change address…' : 'e.g. 123 Main St, Oakland CA'}
+                style={{ width: '100%', padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }}
+              />
+              <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 6 }}>
+                Buyers see this on the pickup map when they order from you.
+              </div>
+              {!user.prep_address && user.latitude == null && (
                 <button onClick={requestLocation} style={{ marginTop: 10, padding: '8px 12px', background: C.cardAlt, borderRadius: 8, font: `500 12px ${font.sans}`, color: C.inkSoft, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <MapPin size={13} /> Share location for pickup distance
+                  <Navigation size={13} /> Or use my current location
                 </button>
               )}
             </div>
@@ -1034,6 +1144,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= BOTTOM NAV (all main screens) ================= */}
         {(screen === 'feed' || screen === 'cart') && (
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0 14px', maxWidth: 430, margin: '0 auto' }}>
             <button onClick={() => setScreen('feed')} style={{ textAlign: 'center', color: screen === 'feed' ? C.terracotta : C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
@@ -1058,6 +1169,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* Toast */}
         {toast && (
           <div style={{ position: 'fixed', left: '50%', transform: 'translateX(-50%)', bottom: 100, background: C.ink, color: '#fff', padding: '12px 20px', borderRadius: 14, font: `500 13px ${font.sans}`, animation: 'pltoast 2.4s ease', boxShadow: '0 8px 24px rgba(0,0,0,.2)', zIndex: 1000 }}>
             {toast}
