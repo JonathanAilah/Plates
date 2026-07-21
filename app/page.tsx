@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
@@ -23,6 +23,33 @@ interface Dish {
   likes: number;
   description: string;
   liked?: boolean;
+  avg_rating?: number | string | null;
+  review_count?: number;
+}
+
+interface Review {
+  id: number;
+  dish_id: number;
+  buyer_id: number;
+  order_id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+  buyer_name: string;
+  buyer_avatar: string;
+  buyer_photo_url: string | null;
+}
+
+interface UnreviewedOrder {
+  order_id: string;
+  dish_id: number;
+  created_at: string;
+  updated_at: string;
+  dish_name: string;
+  dish_emoji: string;
+  dish_photo_url: string | null;
+  seller_name: string;
+  seller_kitchen_name: string | null;
 }
 
 interface CartItem {
@@ -317,6 +344,14 @@ export default function Home() {
   const [adminShowRejectFor, setAdminShowRejectFor] = useState<number | null>(null);
   const [adminShowSuspendFor, setAdminShowSuspendFor] = useState<number | null>(null);
 
+  // Reviews state
+  const [mealReviews, setMealReviews] = useState<Review[]>([]);
+  const [pendingRating, setPendingRating] = useState<UnreviewedOrder | null>(null);
+  const [ratingStars, setRatingStars] = useState(0);
+  const [ratingComment, setRatingComment] = useState('');
+  const [ratingSubmitting, setRatingSubmitting] = useState(false);
+  const [dismissedRatings, setDismissedRatings] = useState<string[]>([]);
+
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -565,6 +600,77 @@ export default function Home() {
     }
   };
 
+  // ============ REVIEWS ============
+
+  const loadReviewsForDish = async (dishId: number) => {
+    try {
+      const res = await fetch(`/api/reviews?action=forDish&dishId=${dishId}`);
+      const data = await res.json();
+      setMealReviews(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('Reviews load error:', e);
+      setMealReviews([]);
+    }
+  };
+
+  const checkForUnreviewedOrders = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/reviews?action=unreviewedOrders');
+      if (!res.ok) return;
+      const orders: UnreviewedOrder[] = await res.json();
+      // Show the oldest unreviewed order first, but skip ones the user dismissed this session
+      const next = orders.find(o => !dismissedRatings.includes(o.order_id));
+      if (next && !pendingRating) {
+        setPendingRating(next);
+        setRatingStars(0);
+        setRatingComment('');
+      }
+    } catch (e) { console.error('Unreviewed check error:', e); }
+  };
+
+  const submitRating = async () => {
+    if (!pendingRating || !ratingStars || ratingSubmitting) return;
+    setRatingSubmitting(true);
+    try {
+      const res = await fetch('/api/reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          orderId: pendingRating.order_id,
+          rating: ratingStars,
+          comment: ratingComment.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Could not submit rating');
+        return;
+      }
+      showToast(`Thanks for rating!`);
+      setDismissedRatings(prev => [...prev, pendingRating.order_id]);
+      setPendingRating(null);
+      // Refresh dishes so aggregate rating updates
+      const dishRes = await fetch('/api/dishes?action=getAll');
+      if (dishRes.ok) {
+        const dishData = await dishRes.json();
+        setDishes(Array.isArray(dishData) ? dishData : []);
+      }
+    } catch (e) {
+      console.error('Rating submit error:', e);
+      showToast('Network error');
+    } finally {
+      setRatingSubmitting(false);
+    }
+  };
+
+  const dismissRating = () => {
+    if (!pendingRating) return;
+    setDismissedRatings(prev => [...prev, pendingRating.order_id]);
+    setPendingRating(null);
+  };
+
   const markThreadRead = async (orderId: string, userId: number) => {
     try {
       await fetch('/api/messages', {
@@ -656,6 +762,8 @@ export default function Home() {
           setProfileName(currentUser.name);
           setProfileBio(currentUser.bio || '');
           loadCart(currentUser.id);
+          // Kick off the unreviewed-orders prompt (only if the user has completed orders waiting)
+          setTimeout(() => { checkForUnreviewedOrders(); }, 800);
 
           // Ask for location if we don't already have one
           if (currentUser.latitude == null && navigator.geolocation) {
@@ -778,6 +886,8 @@ export default function Home() {
     setMealQty(1);
     setShowingDirections(false);
     setTripInfo(null);
+    setMealReviews([]);
+    loadReviewsForDish(dish.id);
     setScreen('meal');
   };
 
@@ -1321,6 +1431,39 @@ export default function Home() {
     return `${days}d ago`;
   };
 
+  // Compact rating chip: "★ 4.6 (12)" or "New" if no reviews yet
+  const RatingChip = ({ dish, size = 11 }: { dish: { avg_rating?: number | string | null; review_count?: number }; size?: number }) => {
+    const count = dish.review_count || 0;
+    if (count === 0) {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: `500 ${size}px ${font.sans}`, color: C.muted }}>
+          <Star size={size + 1} strokeWidth={2.2} /> New
+        </span>
+      );
+    }
+    const avg = Number(dish.avg_rating || 0).toFixed(1);
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: `500 ${size}px ${font.sans}`, color: C.ink }}>
+        <Star size={size + 1} fill={C.gold} color={C.gold} /> {avg} <span style={{ color: C.muted, fontWeight: 400 }}>({count})</span>
+      </span>
+    );
+  };
+
+  // Static stars display for review rows
+  const StarsDisplay = ({ rating, size = 13 }: { rating: number; size?: number }) => (
+    <span style={{ display: 'inline-flex', gap: 1 }}>
+      {[1, 2, 3, 4, 5].map(n => (
+        <Star
+          key={n}
+          size={size}
+          fill={n <= rating ? C.gold : 'none'}
+          color={n <= rating ? C.gold : C.mutedLight}
+          strokeWidth={2}
+        />
+      ))}
+    </span>
+  );
+
   // Photo tile: uses real photo_url if present, else emoji on the striped placeholder
   const PhotoTile = ({ dish, height, radius }: { dish: { photo_url: string | null; emoji: string; name: string }, height: number | string, radius: number }) => {
     if (dish.photo_url) {
@@ -1404,6 +1547,11 @@ export default function Home() {
                         <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}` }}>{heroDish.seller_avatar}</span>
                       )}
                       {heroDish.seller_name}
+                      {(heroDish.review_count ?? 0) > 0 && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                          · <Star size={12} fill={C.gold} color={C.gold} /> {Number(heroDish.avg_rating || 0).toFixed(1)}
+                        </span>
+                      )}
                       {user.latitude != null && heroDish.seller_latitude != null && heroDish.seller_longitude != null && user.longitude != null && (
                         <> · {distanceMiles(user.latitude, user.longitude, heroDish.seller_latitude, heroDish.seller_longitude).toFixed(1)} mi</>
                       )}
@@ -1482,6 +1630,7 @@ export default function Home() {
                           {dist !== null && (
                             <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `${dist.toFixed(1)} mi`} · {etaMinutes(dist)} min</span>
                           )}
+                          <RatingChip dish={dish} size={11} />
                           <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
                         </div>
                       </div>
@@ -1625,6 +1774,43 @@ export default function Home() {
                       <Navigation size={15} /> {showingDirections ? 'Hide directions' : 'Show directions'}
                     </button>
                   )}
+                </div>
+              )}
+            </div>
+
+            {/* Reviews */}
+            <div style={{ padding: '0 22px 110px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6, marginBottom: 10 }}>
+                <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>Reviews</div>
+                <RatingChip dish={selectedDish} size={12} />
+              </div>
+              {mealReviews.length === 0 ? (
+                <div style={{ padding: 20, background: C.card, borderRadius: 14, textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}` }}>
+                  No reviews yet. Be the first to try it!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {mealReviews.map(r => (
+                    <div key={r.id} style={{ background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                        {r.buyer_photo_url ? (
+                          <span style={{ width: 28, height: 28, borderRadius: '50%', backgroundImage: `url(${r.buyer_photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                        ) : (
+                          <span style={{ width: 28, height: 28, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 11px ${font.sans}`, flex: 'none' }}>{r.buyer_avatar}</span>
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>{r.buyer_name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                            <StarsDisplay rating={r.rating} size={11} />
+                            <span style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>{timeAgo(r.created_at)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      {r.comment && (
+                        <div style={{ font: `400 13px/1.4 ${font.sans}`, color: C.inkSoft, marginTop: 4 }}>{r.comment}</div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -3187,6 +3373,84 @@ export default function Home() {
                   No dishes found.
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= RATING MODAL ================= */}
+        {pendingRating && (
+          <div
+            onClick={dismissRating}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(30,15,5,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1500, animation: 'plfade .25s ease' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ background: C.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 22px 24px', width: '100%', maxWidth: 430, boxShadow: '0 -8px 30px rgba(0,0,0,.2)' }}
+            >
+              <div style={{ width: 44, height: 4, background: C.divider, borderRadius: 2, margin: '0 auto 14px' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                <div style={{ width: 54, height: 54, borderRadius: 12, overflow: 'hidden', flex: 'none' }}>
+                  {pendingRating.dish_photo_url ? (
+                    <div style={{ width: '100%', height: '100%', backgroundImage: `url(${pendingRating.dish_photo_url})`, backgroundSize: 'cover' }} />
+                  ) : (
+                    <div style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(45deg,#ece3d5,#ece3d5 9px,#f2ebde 9px,#f2ebde 18px)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>{pendingRating.dish_emoji}</div>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted }}>How was your order?</div>
+                  <div style={{ font: `500 16px/1.15 ${font.serif}`, color: C.ink, marginTop: 2 }}>{pendingRating.dish_name}</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                    from {pendingRating.seller_kitchen_name || pendingRating.seller_name}
+                  </div>
+                </div>
+              </div>
+
+              {/* Star input */}
+              <div style={{ display: 'flex', justifyContent: 'center', gap: 6, padding: '14px 0', background: C.surface, borderRadius: 14, marginBottom: 12 }}>
+                {[1, 2, 3, 4, 5].map(n => (
+                  <button
+                    key={n}
+                    onClick={() => setRatingStars(n)}
+                    disabled={ratingSubmitting}
+                    style={{ padding: 4 }}
+                    aria-label={`${n} star${n === 1 ? '' : 's'}`}
+                  >
+                    <Star
+                      size={38}
+                      fill={n <= ratingStars ? C.gold : 'none'}
+                      color={n <= ratingStars ? C.gold : C.mutedLight}
+                      strokeWidth={2}
+                    />
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                value={ratingComment}
+                onChange={(e) => setRatingComment(e.target.value)}
+                placeholder="Add a comment (optional)…"
+                rows={3}
+                maxLength={500}
+                disabled={ratingSubmitting}
+                style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 12, font: `400 13.5px/1.4 ${font.sans}`, background: '#fff', resize: 'none', outline: 'none', marginBottom: 12 }}
+              />
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={dismissRating}
+                  disabled={ratingSubmitting}
+                  style={{ flex: 1, padding: 12, background: 'transparent', color: C.muted, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                >
+                  Later
+                </button>
+                <button
+                  onClick={submitRating}
+                  disabled={!ratingStars || ratingSubmitting}
+                  style={{ flex: 2, padding: 12, background: ratingStars && !ratingSubmitting ? C.terracotta : C.cardAlt, color: ratingStars && !ratingSubmitting ? '#fff' : C.mutedLight, borderRadius: 12, font: `500 13.5px ${font.sans}` }}
+                >
+                  {ratingSubmitting ? 'Submitting…' : 'Submit rating'}
+                </button>
+              </div>
             </div>
           </div>
         )}

@@ -110,6 +110,21 @@ export async function initializeDatabase() {
 
     await sql`CREATE INDEX IF NOT EXISTS idx_messages_order ON messages(order_id, created_at)`;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS dish_reviews (
+        id SERIAL PRIMARY KEY,
+        dish_id INTEGER NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+        buyer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comment TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (order_id)
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_reviews_dish ON dish_reviews(dish_id, created_at DESC)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON dish_reviews(buyer_id)`;
+
     await sql`CREATE INDEX IF NOT EXISTS idx_dishes_seller_id ON dishes(seller_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_dish_id ON orders(dish_id)`;
@@ -227,9 +242,15 @@ export async function getDishes() {
            u.latitude as seller_latitude, u.longitude as seller_longitude,
            u.kitchen_flags as seller_kitchen_flags,
            u.pickup_description as seller_pickup_description,
-           u.cooking_hours as seller_cooking_hours
+           u.cooking_hours as seller_cooking_hours,
+           COALESCE(r.avg_rating, 0) as avg_rating,
+           COALESCE(r.review_count, 0)::int as review_count
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
+    LEFT JOIN (
+      SELECT dish_id, ROUND(AVG(rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
+      FROM dish_reviews GROUP BY dish_id
+    ) r ON r.dish_id = d.id
     WHERE u.seller_status = 'approved'
       AND u.account_disabled = false
     ORDER BY d.created_at DESC
@@ -239,9 +260,15 @@ export async function getDishes() {
 
 export async function getDish(id: number) {
   const result = await sql`
-    SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.id as seller_id
+    SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.id as seller_id,
+           COALESCE(r.avg_rating, 0) as avg_rating,
+           COALESCE(r.review_count, 0)::int as review_count
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
+    LEFT JOIN (
+      SELECT dish_id, ROUND(AVG(rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
+      FROM dish_reviews GROUP BY dish_id
+    ) r ON r.dish_id = d.id
     WHERE d.id = ${id}
   `;
   return result.rows[0];
@@ -698,6 +725,56 @@ export async function getAdminUserOrders(userId: number) {
     JOIN users s ON d.seller_id = s.id
     WHERE o.buyer_id = ${userId} OR d.seller_id = ${userId}
     ORDER BY o.created_at DESC LIMIT 100
+  `;
+  return result.rows;
+}
+
+// ============= REVIEWS =============
+
+export async function createReview(orderId: string, dishId: number, buyerId: number, rating: number, comment: string | null) {
+  if (rating < 1 || rating > 5) throw new Error('Rating must be 1-5');
+  const cleanComment = comment ? String(comment).trim().slice(0, 500) : null;
+  const result = await sql`
+    INSERT INTO dish_reviews (order_id, dish_id, buyer_id, rating, comment)
+    VALUES (${orderId}, ${dishId}, ${buyerId}, ${rating}, ${cleanComment})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// Get review for a specific order (buyers can only rate once per order — see UNIQUE constraint)
+export async function getReviewForOrder(orderId: string) {
+  const result = await sql`SELECT * FROM dish_reviews WHERE order_id = ${orderId} LIMIT 1`;
+  return result.rows[0] || null;
+}
+
+// List all reviews for a dish, with buyer names
+export async function getReviewsForDish(dishId: number) {
+  const result = await sql`
+    SELECT r.*, u.name as buyer_name, u.avatar as buyer_avatar, u.photo_url as buyer_photo_url
+    FROM dish_reviews r
+    JOIN users u ON r.buyer_id = u.id
+    WHERE r.dish_id = ${dishId}
+    ORDER BY r.created_at DESC
+  `;
+  return result.rows;
+}
+
+// Get orders that are picked_up and don't have a review yet (for the "rate your recent order?" prompt)
+export async function getUnreviewedOrdersForBuyer(buyerId: number) {
+  const result = await sql`
+    SELECT o.id as order_id, o.dish_id, o.created_at, o.updated_at,
+           d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url,
+           u.name as seller_name, u.kitchen_name as seller_kitchen_name
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    JOIN users u ON d.seller_id = u.id
+    LEFT JOIN dish_reviews r ON r.order_id = o.id
+    WHERE o.buyer_id = ${buyerId}
+      AND o.status = 'picked_up'
+      AND r.id IS NULL
+    ORDER BY o.updated_at DESC
+    LIMIT 5
   `;
   return result.rows;
 }
