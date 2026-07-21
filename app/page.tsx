@@ -9,6 +9,7 @@ import AddressAutocomplete from '@/components/AddressAutocomplete';
 interface Dish {
   id: number;
   name: string;
+  seller_id: number;
   seller_name: string;
   seller_avatar: string;
   seller_photo_url: string | null;
@@ -25,6 +26,8 @@ interface Dish {
   liked?: boolean;
   avg_rating?: number | string | null;
   review_count?: number;
+  is_featured?: boolean;
+  is_hidden_from_profile?: boolean;
 }
 
 interface Review {
@@ -2156,14 +2159,18 @@ export default function Home() {
                           <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
                           <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
+                        <a
+                          href={`/cook/${dish.seller_id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}`, textDecoration: 'none' }}
+                        >
                           {dish.seller_photo_url ? (
                             <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
                           ) : (
                             <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
                           )}
-                          {dish.seller_name}
-                        </div>
+                          <span style={{ textDecoration: 'underline', textDecorationColor: 'transparent' }}>{dish.seller_name}</span>
+                        </a>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
                           {dist !== null && (
                             <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
@@ -2513,24 +2520,26 @@ export default function Home() {
                 </div>
               )}
 
-              <div style={{ marginTop: 22, background: C.card, borderRadius: 14, padding: 14, border: `1px solid ${C.cardAlt}` }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  {selectedDish.seller_photo_url ? (
-                    <span style={{ width: 40, height: 40, borderRadius: '50%', backgroundImage: `url(${selectedDish.seller_photo_url})`, backgroundSize: 'cover' }} />
-                  ) : (
-                    <span style={{ width: 40, height: 40, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 14px ${font.sans}` }}>{selectedDish.seller_avatar}</span>
-                  )}
-                  <div style={{ flex: 1 }}>
-                    <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{selectedDish.seller_name}</div>
-                    <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
-                      {selectedDish.seller_cooking_hours || 'Home cook'}
+              <a href={`/cook/${selectedDish.seller_id}`} style={{ display: 'block', textDecoration: 'none', color: 'inherit', marginTop: 22 }}>
+                <div style={{ background: C.card, borderRadius: 14, padding: 14, border: `1px solid ${C.cardAlt}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {selectedDish.seller_photo_url ? (
+                      <span style={{ width: 40, height: 40, borderRadius: '50%', backgroundImage: `url(${selectedDish.seller_photo_url})`, backgroundSize: 'cover' }} />
+                    ) : (
+                      <span style={{ width: 40, height: 40, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 14px ${font.sans}` }}>{selectedDish.seller_avatar}</span>
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{selectedDish.seller_name}</div>
+                      <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                        {selectedDish.seller_cooking_hours || 'Home cook'}
+                      </div>
                     </div>
+                    <div style={{ font: `500 11px ${font.sans}`, color: C.terracotta, whiteSpace: 'nowrap' }}>View profile →</div>
                   </div>
-                </div>
-                {selectedDish.seller_kitchen_flags && (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
-                    {selectedDish.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).map(flag => (
-                      <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
+                  {selectedDish.seller_kitchen_flags && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                      {selectedDish.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).map(flag => (
+                        <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
                         {flag.charAt(0).toUpperCase() + flag.slice(1).replace('-', ' ')}
                       </span>
                     ))}
@@ -2541,7 +2550,8 @@ export default function Home() {
                     <span style={{ color: C.muted }}>Pickup: </span>{selectedDish.seller_pickup_description}
                   </div>
                 )}
-              </div>
+                </div>
+              </a>
 
               {selectedDish.seller_latitude != null && selectedDish.seller_longitude != null && (
                 <div style={{ marginTop: 18 }}>

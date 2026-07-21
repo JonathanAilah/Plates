@@ -142,6 +142,28 @@ export async function initializeDatabase() {
     await sql`CREATE INDEX IF NOT EXISTS idx_posts_expires ON posts(expires_at)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at DESC)`;
 
+    // Cook pickup hours: recurring weekly schedule per cook.
+    // day_of_week: 0 = Sunday .. 6 = Saturday
+    // start_time / end_time stored as HH:MM strings (24h) for simplicity
+    // daily_capacity: how many orders the cook can fill that day total (null = unlimited)
+    await sql`
+      CREATE TABLE IF NOT EXISTS pickup_hours (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        daily_capacity INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (user_id, day_of_week)
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_pickup_hours_user ON pickup_hours(user_id)`;
+
+    // Add pickup_slot column to orders — stores the buyer's chosen slot as HH:MM (or null for ASAP)
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_slot TEXT`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_date DATE`;
+
     await sql`
       CREATE TABLE IF NOT EXISTS post_comments (
         id SERIAL PRIMARY KEY,
@@ -165,6 +187,9 @@ export async function initializeDatabase() {
     await sql`CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions(post_id)`;
 
     await sql`CREATE INDEX IF NOT EXISTS idx_dishes_seller_id ON dishes(seller_id)`;
+    // Profile visibility controls per dish
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS is_hidden_from_profile BOOLEAN DEFAULT false`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_dish_id ON orders(dish_id)`;
 
@@ -1009,4 +1034,203 @@ export async function deleteComment(commentId: number) {
 export async function getCommentAuthor(commentId: number): Promise<number | null> {
   const result = await sql`SELECT user_id FROM post_comments WHERE id = ${commentId} LIMIT 1`;
   return result.rows[0]?.user_id ?? null;
+}
+
+// ============= PICKUP HOURS =============
+
+export interface PickupHoursRow {
+  id: number;
+  user_id: number;
+  day_of_week: number;
+  start_time: string;
+  end_time: string;
+  daily_capacity: number | null;
+}
+
+export async function getPickupHours(userId: number) {
+  const result = await sql`
+    SELECT * FROM pickup_hours WHERE user_id = ${userId} ORDER BY day_of_week ASC
+  `;
+  return result.rows;
+}
+
+// Upsert a single day's hours. Passing null start_time deletes it (closed that day).
+export async function setPickupDay(
+  userId: number,
+  dayOfWeek: number,
+  startTime: string | null,
+  endTime: string | null,
+  dailyCapacity: number | null,
+) {
+  if (dayOfWeek < 0 || dayOfWeek > 6) throw new Error('Invalid day_of_week');
+  // Closed that day: remove the row
+  if (!startTime || !endTime) {
+    await sql`DELETE FROM pickup_hours WHERE user_id = ${userId} AND day_of_week = ${dayOfWeek}`;
+    return { deleted: true };
+  }
+  // Basic format check (HH:MM). We trust the client to send strings in this shape.
+  if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime)) {
+    throw new Error('Times must be HH:MM (24h)');
+  }
+  if (startTime >= endTime) throw new Error('End time must be after start time');
+  const cap = dailyCapacity != null && dailyCapacity > 0 ? Math.floor(dailyCapacity) : null;
+  const result = await sql`
+    INSERT INTO pickup_hours (user_id, day_of_week, start_time, end_time, daily_capacity)
+    VALUES (${userId}, ${dayOfWeek}, ${startTime}, ${endTime}, ${cap})
+    ON CONFLICT (user_id, day_of_week) DO UPDATE SET
+      start_time = EXCLUDED.start_time,
+      end_time = EXCLUDED.end_time,
+      daily_capacity = EXCLUDED.daily_capacity
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// Public: get a specific cook's available slots for TODAY (or a given date).
+// Returns slots + remaining capacity for that date.
+export async function getAvailableSlotsForCook(sellerUserId: number, isoDateString: string) {
+  // Parse to determine day-of-week
+  const date = new Date(isoDateString + 'T00:00:00');
+  const dow = date.getDay();
+
+  const hoursResult = await sql`
+    SELECT * FROM pickup_hours WHERE user_id = ${sellerUserId} AND day_of_week = ${dow} LIMIT 1
+  `;
+  const hours = hoursResult.rows[0];
+  if (!hours) return { open: false, slots: [], dailyCapacity: null, ordersToday: 0, remaining: 0 };
+
+  // Count today's orders for this seller (any of their dishes)
+  const orderCountResult = await sql`
+    SELECT COUNT(*)::int as c FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${sellerUserId}
+      AND o.pickup_date = ${isoDateString}
+      AND o.status NOT IN ('cancelled')
+  `;
+  const ordersToday = orderCountResult.rows[0].c;
+  const cap = hours.daily_capacity;
+  const remaining = cap != null ? Math.max(0, cap - ordersToday) : Number.POSITIVE_INFINITY;
+
+  // Generate 15-min slots within [start, end]
+  const [sh, sm] = String(hours.start_time).split(':').map((n: string) => parseInt(n));
+  const [eh, em] = String(hours.end_time).split(':').map((n: string) => parseInt(n));
+  const startMinutes = sh * 60 + sm;
+  const endMinutes = eh * 60 + em;
+  const slots: string[] = [];
+  for (let m = startMinutes; m < endMinutes; m += 15) {
+    const hh = Math.floor(m / 60).toString().padStart(2, '0');
+    const mm = (m % 60).toString().padStart(2, '0');
+    slots.push(`${hh}:${mm}`);
+  }
+
+  return {
+    open: true,
+    slots,
+    dailyCapacity: cap,
+    ordersToday,
+    remaining: cap != null ? remaining : null,
+    startTime: hours.start_time,
+    endTime: hours.end_time,
+  };
+}
+
+// ============= COOK PROFILES (public) =============
+
+// Public cook profile: only for approved, non-disabled cooks. Returns null otherwise.
+export async function getCookPublicProfile(userId: number) {
+  const userResult = await sql`
+    SELECT id, name, avatar, photo_url, bio,
+           kitchen_name, pickup_description, kitchen_flags,
+           latitude, longitude, prep_address,
+           seller_status, account_disabled,
+           created_at
+    FROM users WHERE id = ${userId} LIMIT 1
+  `;
+  const user = userResult.rows[0];
+  if (!user || user.seller_status !== 'approved' || user.account_disabled) {
+    return null;
+  }
+
+  // Their currently-posted dishes, excluding ones they've hidden from their profile.
+  const dishesResult = await sql`
+    SELECT d.id, d.name, d.description, d.price, d.emoji, d.photo_url, d.likes,
+           d.is_featured, d.created_at,
+           COALESCE(r.avg_rating, 0) as avg_rating,
+           COALESCE(r.review_count, 0)::int as review_count
+    FROM dishes d
+    LEFT JOIN (
+      SELECT dish_id, ROUND(AVG(rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
+      FROM dish_reviews GROUP BY dish_id
+    ) r ON r.dish_id = d.id
+    WHERE d.seller_id = ${userId}
+      AND (d.is_hidden_from_profile IS DISTINCT FROM true)
+    ORDER BY d.is_featured DESC, d.created_at DESC
+  `;
+
+  // Aggregate rating across all their dishes
+  const aggResult = await sql`
+    SELECT ROUND(AVG(r.rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
+    FROM dish_reviews r
+    JOIN dishes d ON r.dish_id = d.id
+    WHERE d.seller_id = ${userId}
+  `;
+  const agg = aggResult.rows[0] || { avg_rating: null, review_count: 0 };
+
+  // Their active (non-expired) community posts
+  await pruneExpiredPosts();
+  const postsResult = await sql`
+    SELECT p.id, p.body, p.photo_url, p.created_at, p.expires_at,
+           COALESCE(rc.heart_count, 0)::int as heart_count,
+           COALESCE(rc.fire_count, 0)::int as fire_count,
+           COALESCE(rc.hands_count, 0)::int as hands_count,
+           COALESCE(cc.comment_count, 0)::int as comment_count
+    FROM posts p
+    LEFT JOIN (
+      SELECT post_id,
+        COUNT(*) FILTER (WHERE kind = 'heart') as heart_count,
+        COUNT(*) FILTER (WHERE kind = 'fire') as fire_count,
+        COUNT(*) FILTER (WHERE kind = 'hands') as hands_count
+      FROM post_reactions GROUP BY post_id
+    ) rc ON rc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*)::int as comment_count
+      FROM post_comments GROUP BY post_id
+    ) cc ON cc.post_id = p.id
+    WHERE p.user_id = ${userId}
+      AND p.expires_at > CURRENT_TIMESTAMP
+    ORDER BY p.created_at DESC
+    LIMIT 20
+  `;
+
+  return {
+    cook: user,
+    dishes: dishesResult.rows,
+    aggregateRating: {
+      avg: agg.avg_rating != null ? Number(agg.avg_rating) : null,
+      count: agg.review_count,
+    },
+    posts: postsResult.rows,
+  };
+}
+
+export async function updateDishFeatured(dishId: number, featured: boolean) {
+  const result = await sql`
+    UPDATE dishes SET is_featured = ${featured} WHERE id = ${dishId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function updateDishHidden(dishId: number, hidden: boolean) {
+  const result = await sql`
+    UPDATE dishes SET is_hidden_from_profile = ${hidden} WHERE id = ${dishId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function updateUserBio(userId: number, bio: string) {
+  const clean = String(bio || '').trim().slice(0, 500);
+  const result = await sql`
+    UPDATE users SET bio = ${clean} WHERE id = ${userId} RETURNING *
+  `;
+  return result.rows[0];
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   createDish, getDishes, getDish, getSellerDishes, toggleLike, isLiked,
   updateDishPrice, deleteDish, updateDishPhoto, checkGenRateLimit,
+  updateDishFeatured, updateDishHidden,
 } from '@/lib/db';
 import { generateFoodImage } from '@/lib/imageGen';
 import { getSessionUser, requireSessionUser } from '@/lib/auth';
@@ -76,6 +77,22 @@ export async function POST(request: NextRequest) {
       if (!dish) return NextResponse.json({ error: 'Not found' }, { status: 404 });
       if (dish.seller_id !== me.id) return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
       const updated = await updateDishPrice(body.dishId, body.price);
+      return NextResponse.json(updated);
+    }
+
+    if (action === 'setFeatured') {
+      const dish = await getDish(body.dishId);
+      if (!dish) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (dish.seller_id !== me.id) return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
+      const updated = await updateDishFeatured(body.dishId, !!body.featured);
+      return NextResponse.json(updated);
+    }
+
+    if (action === 'setHidden') {
+      const dish = await getDish(body.dishId);
+      if (!dish) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (dish.seller_id !== me.id) return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
+      const updated = await updateDishHidden(body.dishId, !!body.hidden);
       return NextResponse.json(updated);
     }
 
