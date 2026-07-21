@@ -86,6 +86,19 @@ export async function initializeDatabase() {
 
     await sql`CREATE INDEX IF NOT EXISTS idx_cart_buyer ON cart_items(buyer_id)`;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        read_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
+    await sql`CREATE INDEX IF NOT EXISTS idx_messages_order ON messages(order_id, created_at)`;
+
     await sql`CREATE INDEX IF NOT EXISTS idx_dishes_seller_id ON dishes(seller_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_dish_id ON orders(dish_id)`;
@@ -358,4 +371,65 @@ export async function checkoutCart(buyerId: number, tipAmount: number, serviceFe
   }
   await clearCart(buyerId);
   return { orders, total: total + tipAmount + serviceFee, subtotal: total, tip: tipAmount, fee: serviceFee };
+}
+
+// ============= MESSAGES =============
+
+// Verify a user is a party to an order (buyer or seller). Returns the order row or null.
+export async function getOrderIfParticipant(orderId: string, userId: number) {
+  const result = await sql`
+    SELECT o.*, d.seller_id
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE o.id = ${orderId} AND (o.buyer_id = ${userId} OR d.seller_id = ${userId})
+    LIMIT 1
+  `;
+  return result.rows[0] || null;
+}
+
+export async function getMessagesForOrder(orderId: string) {
+  const result = await sql`
+    SELECT m.*, u.name as sender_name, u.avatar as sender_avatar, u.photo_url as sender_photo_url
+    FROM messages m
+    JOIN users u ON m.sender_id = u.id
+    WHERE m.order_id = ${orderId}
+    ORDER BY m.created_at ASC
+  `;
+  return result.rows;
+}
+
+export async function sendMessage(orderId: string, senderId: number, body: string) {
+  const trimmed = body.trim();
+  if (!trimmed) throw new Error('Empty message');
+  if (trimmed.length > 1000) throw new Error('Message too long');
+  const result = await sql`
+    INSERT INTO messages (order_id, sender_id, body)
+    VALUES (${orderId}, ${senderId}, ${trimmed})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function markMessagesRead(orderId: string, readerId: number) {
+  // Mark messages read for anyone EXCEPT the reader
+  await sql`
+    UPDATE messages SET read_at = CURRENT_TIMESTAMP
+    WHERE order_id = ${orderId} AND sender_id != ${readerId} AND read_at IS NULL
+  `;
+  return { success: true };
+}
+
+// Returns unread counts per order for a given user (either as buyer or seller)
+export async function getUnreadCounts(userId: number) {
+  const result = await sql`
+    SELECT o.id as order_id, COUNT(m.id)::int as unread
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    LEFT JOIN messages m ON m.order_id = o.id AND m.sender_id != ${userId} AND m.read_at IS NULL
+    WHERE (o.buyer_id = ${userId} OR d.seller_id = ${userId})
+      AND o.status NOT IN ('picked_up', 'cancelled')
+    GROUP BY o.id
+    HAVING COUNT(m.id) > 0
+  `;
+  return result.rows;
 }

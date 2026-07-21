@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send } from 'lucide-react';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 
@@ -83,6 +83,18 @@ interface CookOrder {
   buyer_name: string;
   buyer_avatar: string;
   buyer_photo_url: string | null;
+}
+
+interface Message {
+  id: number;
+  order_id: string;
+  sender_id: number;
+  body: string;
+  read_at: string | null;
+  created_at: string;
+  sender_name: string;
+  sender_avatar: string;
+  sender_photo_url: string | null;
 }
 
 interface Notification {
@@ -183,7 +195,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [orders, setOrders] = useState<BuyerOrder[]>([]);
@@ -223,6 +235,17 @@ export default function Home() {
   const [cpCookingHours, setCpCookingHours] = useState('');
   const [cpPickupDesc, setCpPickupDesc] = useState('');
   const [cpSaving, setCpSaving] = useState(false);
+
+  // Chat state
+  const [chatOrder, setChatOrder] = useState<BuyerOrder | CookOrder | null>(null);
+  const [chatOtherPartyName, setChatOtherPartyName] = useState('');
+  const [chatOtherPartyPhoto, setChatOtherPartyPhoto] = useState<string | null>(null);
+  const [chatOtherPartyAvatar, setChatOtherPartyAvatar] = useState<string>('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messageDraft, setMessageDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [unreadByOrder, setUnreadByOrder] = useState<Record<string, number>>({});
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -265,6 +288,97 @@ export default function Home() {
     } catch (e) {
       console.error('Cook orders load error:', e);
     }
+  };
+
+  const loadMessages = async (orderId: string, userId: number) => {
+    try {
+      const res = await fetch(`/api/messages?action=list&orderId=${orderId}&userId=${userId}`);
+      const data = await res.json();
+      setMessages(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('Messages load error:', e);
+    }
+  };
+
+  const loadUnreadCounts = async (userId: number) => {
+    try {
+      const res = await fetch(`/api/messages?action=unreadCounts&userId=${userId}`);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        const map: Record<string, number> = {};
+        for (const row of data) map[row.order_id] = row.unread;
+        setUnreadByOrder(map);
+      }
+    } catch (e) {
+      console.error('Unread counts error:', e);
+    }
+  };
+
+  const markThreadRead = async (orderId: string, userId: number) => {
+    try {
+      await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'markRead', orderId, userId }),
+      });
+      setUnreadByOrder(prev => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+    } catch (e) {
+      console.error('Mark read error:', e);
+    }
+  };
+
+  const sendMessageAction = async (customText?: string) => {
+    if (!user || !chatOrder || sending) return;
+    const text = (customText ?? messageDraft).trim();
+    if (!text) return;
+    setSending(true);
+    setMessageDraft('');
+    try {
+      const res = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'send', orderId: chatOrder.id, senderId: user.id, message: text }),
+      });
+      if (!res.ok) throw new Error('Send failed');
+      await loadMessages(chatOrder.id, user.id);
+    } catch (e) {
+      console.error('Send message error:', e);
+      showToast('Could not send message');
+      // Restore draft on failure so user doesn't lose their text
+      if (!customText) setMessageDraft(text);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Open chat as buyer from a buyer order
+  const openChatAsBuyer = (order: BuyerOrder) => {
+    if (!user) return;
+    setChatOrder(order);
+    setChatOtherPartyName(order.seller_kitchen_name || order.seller_name);
+    setChatOtherPartyPhoto(order.seller_photo_url);
+    setChatOtherPartyAvatar(order.seller_avatar);
+    setMessages([]);
+    loadMessages(order.id, user.id);
+    markThreadRead(order.id, user.id);
+    setScreen('chat');
+  };
+
+  // Open chat as cook from a cook order
+  const openChatAsCook = (order: CookOrder) => {
+    if (!user) return;
+    setChatOrder(order);
+    setChatOtherPartyName(order.buyer_name);
+    setChatOtherPartyPhoto(order.buyer_photo_url);
+    setChatOtherPartyAvatar(order.buyer_avatar);
+    setMessages([]);
+    loadMessages(order.id, user.id);
+    markThreadRead(order.id, user.id);
+    setScreen('chat');
   };
 
   useEffect(() => {
@@ -349,20 +463,45 @@ export default function Home() {
     if (!user) return;
     const isBuyerView = screen === 'orders' || screen === 'order-detail';
     const isCookView = screen === 'kitchen-queue';
-    if (!isBuyerView && !isCookView) return;
+    const isChatView = screen === 'chat';
+    if (!isBuyerView && !isCookView && !isChatView) return;
 
     // Refresh immediately when the screen opens
     if (isBuyerView) loadOrders(user.id);
     if (isCookView) loadCookOrders(user.id);
+    if (isChatView && chatOrder) loadMessages(chatOrder.id, user.id);
 
     const interval = setInterval(() => {
       if (document.hidden) return; // Save battery when tab isn't visible
       if (screen === 'orders' || screen === 'order-detail') loadOrders(user.id);
       if (screen === 'kitchen-queue') loadCookOrders(user.id);
+      if (screen === 'chat' && chatOrder) {
+        loadMessages(chatOrder.id, user.id);
+        markThreadRead(chatOrder.id, user.id);
+      }
     }, 5000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, user?.id]);
+  }, [screen, user?.id, chatOrder?.id]);
+
+  // Background unread-count polling (any screen, so badges appear in nav / order lists)
+  useEffect(() => {
+    if (!user) return;
+    loadUnreadCounts(user.id);
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      loadUnreadCounts(user.id);
+    }, 10000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  // Auto-scroll to bottom of chat when new messages arrive
+  useEffect(() => {
+    if (screen === 'chat' && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, screen]);
 
   const toggleLike = async (dishId: number) => {
     if (!user) return;
@@ -1278,6 +1417,11 @@ export default function Home() {
               <button onClick={() => setScreen('orders')} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 0, background: 'transparent' }}>
                 <span style={{ font: `400 14px ${font.sans}`, color: C.inkSoft, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Receipt size={16} /> Your orders
+                  {Object.values(unreadByOrder).reduce((a, b) => a + b, 0) > 0 && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 8, background: C.terracotta, color: '#fff', font: `500 10.5px ${font.sans}` }}>
+                      <MessageCircle size={10} /> {Object.values(unreadByOrder).reduce((a, b) => a + b, 0)}
+                    </span>
+                  )}
                 </span>
                 <span style={{ font: `500 13px ${font.sans}`, color: C.terracotta }}>
                   {activeCount > 0 ? `${activeCount} active ›` : `View all ›`}
@@ -1350,10 +1494,15 @@ export default function Home() {
                 <div style={{ font: `500 15px ${font.serif}`, color: cookActiveCount > 0 ? '#fff' : C.ink }}>
                   Kitchen queue
                 </div>
-                <div style={{ font: `400 12px ${font.sans}`, color: cookActiveCount > 0 ? 'rgba(255,255,255,.85)' : C.muted, marginTop: 2 }}>
+                <div style={{ font: `400 12px ${font.sans}`, color: cookActiveCount > 0 ? 'rgba(255,255,255,.85)' : C.muted, marginTop: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {cookActiveCount > 0
                     ? `${cookActiveCount} active order${cookActiveCount === 1 ? '' : 's'}`
                     : 'No active orders'}
+                  {Object.values(unreadByOrder).reduce((a, b) => a + b, 0) > 0 && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 7px', borderRadius: 8, background: cookActiveCount > 0 ? '#fff' : C.terracotta, color: cookActiveCount > 0 ? C.terracotta : '#fff', font: `500 10.5px ${font.sans}` }}>
+                      <MessageCircle size={10} /> {Object.values(unreadByOrder).reduce((a, b) => a + b, 0)}
+                    </span>
+                  )}
                 </div>
               </div>
               <div style={{ color: cookActiveCount > 0 ? '#fff' : C.terracotta, font: `500 12px ${font.sans}`, flex: 'none' }}>Open ›</div>
@@ -1572,9 +1721,16 @@ export default function Home() {
                       <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>
                         from {o.seller_kitchen_name || o.seller_name} · {timeAgo(o.created_at)}
                       </div>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status] + '22', color: statusColors[o.status], font: `500 11px ${font.sans}` }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColors[o.status] }} />
-                        {statusLabels[o.status]}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status] + '22', color: statusColors[o.status], font: `500 11px ${font.sans}` }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColors[o.status] }} />
+                          {statusLabels[o.status]}
+                        </div>
+                        {unreadByOrder[o.id] > 0 && (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', borderRadius: 8, background: C.terracotta, color: '#fff', font: `500 11px ${font.sans}` }}>
+                            <MessageCircle size={11} /> {unreadByOrder[o.id]}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1664,6 +1820,14 @@ export default function Home() {
                         <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>{o.seller_cooking_hours}</div>
                       )}
                     </div>
+                    {o.status !== 'picked_up' && o.status !== 'cancelled' && (
+                      <button onClick={() => openChatAsBuyer(o)} style={{ position: 'relative', width: 40, height: 40, borderRadius: 12, background: C.terracottaLight, color: C.terracotta, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                        <MessageCircle size={18} />
+                        {unreadByOrder[o.id] > 0 && (
+                          <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: C.terracotta, color: '#fff', font: `500 10px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${C.card}` }}>{unreadByOrder[o.id]}</span>
+                        )}
+                      </button>
+                    )}
                   </div>
                   {o.seller_pickup_description && (
                     <div style={{ marginTop: 10, padding: '10px 12px', background: C.surface, borderRadius: 10, font: `400 12.5px ${font.sans}`, color: C.inkSoft }}>
@@ -1776,6 +1940,12 @@ export default function Home() {
                           {o.status === 'ready' && (
                             <button onClick={() => updateOrderStatus(o.id, 'picked_up')} style={{ flex: 1, background: C.ink, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Mark picked up</button>
                           )}
+                          <button onClick={() => openChatAsCook(o)} style={{ position: 'relative', width: 40, height: 40, borderRadius: 10, background: C.terracottaLight, color: C.terracotta, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                            <MessageCircle size={16} />
+                            {unreadByOrder[o.id] > 0 && (
+                              <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: C.terracotta, color: '#fff', font: `500 10px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${C.card}` }}>{unreadByOrder[o.id]}</span>
+                            )}
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1785,6 +1955,147 @@ export default function Home() {
             )}
           </div>
         )}
+
+        {/* ================= CHAT (order-scoped) ================= */}
+        {screen === 'chat' && chatOrder && (() => {
+          const isClosed = chatOrder.status === 'picked_up' || chatOrder.status === 'cancelled';
+          const templates = ['On my way', 'Running late', "I'm here", 'Thanks!'];
+          return (
+            <div style={{ animation: 'plfade .3s ease', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+              {/* Header */}
+              <div style={{ padding: '18px 22px 12px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: `1px solid ${C.hairline}`, background: C.card }}>
+                <button onClick={() => {
+                  // Return to whichever screen makes sense
+                  if (user.isSeller && cookOrders.find(c => c.id === chatOrder.id)) setScreen('kitchen-queue');
+                  else setScreen('order-detail');
+                }} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                  <ArrowLeft size={18} />
+                </button>
+                {chatOtherPartyPhoto ? (
+                  <span style={{ width: 36, height: 36, borderRadius: '50%', backgroundImage: `url(${chatOtherPartyPhoto})`, backgroundSize: 'cover' }} />
+                ) : (
+                  <span style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 13px ${font.sans}` }}>{chatOtherPartyAvatar}</span>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: `500 15px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{chatOtherPartyName}</div>
+                  <div style={{ font: `400 11px ${font.sans}`, color: statusColors[chatOrder.status] }}>
+                    {statusLabels[chatOrder.status]}
+                  </div>
+                </div>
+              </div>
+
+              {/* Message list */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', background: C.surface }}>
+                {messages.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 20px', color: C.muted }}>
+                    <MessageCircle size={28} style={{ opacity: .4, marginBottom: 10 }} />
+                    <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 4 }}>No messages yet</div>
+                    <div style={{ font: `400 12px ${font.sans}` }}>Say hi or use a quick reply below.</div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {messages.map((m, i) => {
+                      const isMe = m.sender_id === user.id;
+                      const prev = messages[i - 1];
+                      const showTime = !prev || (new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() > 5 * 60 * 1000);
+                      return (
+                        <React.Fragment key={m.id}>
+                          {showTime && (
+                            <div style={{ textAlign: 'center', font: `400 10.5px ${font.sans}`, color: C.muted, margin: '6px 0' }}>
+                              {new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start' }}>
+                            <div style={{
+                              maxWidth: '78%',
+                              padding: '10px 14px',
+                              borderRadius: 16,
+                              borderBottomRightRadius: isMe ? 4 : 16,
+                              borderBottomLeftRadius: isMe ? 16 : 4,
+                              background: isMe ? C.terracotta : C.card,
+                              color: isMe ? '#fff' : C.ink,
+                              font: `400 14px/1.4 ${font.sans}`,
+                              wordBreak: 'break-word',
+                            }}>
+                              {m.body}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                    <div ref={chatEndRef} />
+                  </div>
+                )}
+              </div>
+
+              {/* Composer */}
+              {isClosed ? (
+                <div style={{ padding: '14px 22px 20px', background: C.card, borderTop: `1px solid ${C.hairline}`, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  This order is {chatOrder.status === 'cancelled' ? 'cancelled' : 'complete'} — messages are closed.
+                </div>
+              ) : (
+                <div style={{ background: C.card, borderTop: `1px solid ${C.hairline}`, padding: '10px 16px 16px' }}>
+                  {/* Quick replies */}
+                  <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 4 }}>
+                    {templates.map(t => (
+                      <button
+                        key={t}
+                        onClick={() => sendMessageAction(t)}
+                        disabled={sending}
+                        style={{ flex: 'none', padding: '7px 12px', background: C.surface, color: C.inkSoft, border: `1px solid ${C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <textarea
+                      value={messageDraft}
+                      onChange={(e) => setMessageDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          sendMessageAction();
+                        }
+                      }}
+                      placeholder="Type a message…"
+                      rows={1}
+                      style={{
+                        flex: 1,
+                        padding: '10px 14px',
+                        border: `1px solid ${C.divider}`,
+                        borderRadius: 20,
+                        font: `400 14px ${font.sans}`,
+                        background: C.surface,
+                        resize: 'none',
+                        maxHeight: 100,
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      onClick={() => sendMessageAction()}
+                      disabled={!messageDraft.trim() || sending}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 20,
+                        background: messageDraft.trim() && !sending ? C.terracotta : C.cardAlt,
+                        color: messageDraft.trim() && !sending ? '#fff' : C.mutedLight,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flex: 'none',
+                      }}
+                    >
+                      <Send size={17} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {(screen === 'feed' || screen === 'cart') && (
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0 14px', maxWidth: 430, margin: '0 auto' }}>
             <button onClick={() => setScreen('feed')} style={{ textAlign: 'center', color: screen === 'feed' ? C.terracotta : C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
