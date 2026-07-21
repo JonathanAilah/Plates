@@ -4,9 +4,15 @@ import {
   updateDishPrice, deleteDish, updateDishPhoto, checkGenRateLimit,
 } from '@/lib/db';
 import { generateFoodImage } from '@/lib/imageGen';
+import { getSessionUser, requireSessionUser } from '@/lib/auth';
 
-// Image generation may take up to ~30 seconds
 export const maxDuration = 60;
+
+function errorResponse(error: any) {
+  const status = error?.status || 500;
+  const message = error?.message || 'Internal server error';
+  return NextResponse.json({ error: message }, { status });
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,6 +21,7 @@ export async function GET(request: NextRequest) {
     const id = searchParams.get('id');
     const sellerId = searchParams.get('sellerId');
 
+    // Public: anyone can browse
     if (action === 'getAll') {
       const dishes = await getDishes();
       return NextResponse.json(dishes);
@@ -33,53 +40,54 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Dishes GET error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return errorResponse(error);
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { action, sellerId, name, description, price, emoji, userId, dishId, photoUrl } = await request.json();
+    const body = await request.json();
+    const { action } = body;
+
+    // All POSTs require auth
+    const me = await requireSessionUser();
 
     if (action === 'create') {
-      const dish = await createDish(sellerId, name, description, price, emoji, photoUrl ?? null);
+      // Server enforces seller_id is the current user — client can't spoof
+      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null);
       return NextResponse.json(dish);
     }
 
     if (action === 'toggleLike') {
-      await toggleLike(userId, dishId);
-      const liked = await isLiked(userId, dishId);
+      await toggleLike(me.id, body.dishId);
+      const liked = await isLiked(me.id, body.dishId);
       return NextResponse.json({ liked });
     }
 
     if (action === 'updatePrice') {
-      const dish = await updateDishPrice(dishId, price);
-      return NextResponse.json(dish);
+      // Verify ownership
+      const dish = await getDish(body.dishId);
+      if (!dish) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (dish.seller_id !== me.id) return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
+      const updated = await updateDishPrice(body.dishId, body.price);
+      return NextResponse.json(updated);
     }
 
     if (action === 'delete') {
-      const result = await deleteDish(dishId);
+      const dish = await getDish(body.dishId);
+      if (!dish) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      if (dish.seller_id !== me.id) return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
+      const result = await deleteDish(body.dishId);
       return NextResponse.json(result);
     }
 
     if (action === 'generatePhoto') {
-      // Requires userId (the requesting cook) and dishId
-      if (!userId || !dishId) {
-        return NextResponse.json({ error: 'userId and dishId required' }, { status: 400 });
-      }
-
-      // Load the dish and verify ownership + no existing photo
-      const dish = await getDish(parseInt(dishId));
+      const dish = await getDish(body.dishId);
       if (!dish) return NextResponse.json({ error: 'Dish not found' }, { status: 404 });
-      if (dish.seller_id !== parseInt(userId)) {
-        return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
-      }
-      if (dish.photo_url) {
-        return NextResponse.json({ error: 'Dish already has a photo' }, { status: 400 });
-      }
+      if (dish.seller_id !== me.id) return NextResponse.json({ error: 'Not your dish' }, { status: 403 });
+      if (dish.photo_url) return NextResponse.json({ error: 'Dish already has a photo' }, { status: 400 });
 
-      // Rate limit
-      const rl = checkGenRateLimit(parseInt(userId));
+      const rl = checkGenRateLimit(me.id);
       if (!rl.allowed) {
         return NextResponse.json({ error: `Please wait ${Math.ceil(rl.retryInMs / 1000)}s`, retryInMs: rl.retryInMs }, { status: 429 });
       }
@@ -97,6 +105,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Dishes POST error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return errorResponse(error);
   }
 }

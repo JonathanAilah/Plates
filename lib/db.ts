@@ -29,6 +29,10 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_flags TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_hours TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_description TEXT`;
+    // Auth columns
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS clerk_user_id TEXT UNIQUE`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_user_id)`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dishes (
@@ -180,6 +184,25 @@ export async function updateUserProfile(id: number, name: string, bio: string, p
     UPDATE users SET name = ${name}, bio = ${bio}, photo_url = ${photoUrl} WHERE id = ${id} RETURNING *
   `;
   return result.rows[0];
+}
+
+export async function getUserByClerkId(clerkUserId: string) {
+  const result = await sql`SELECT * FROM users WHERE clerk_user_id = ${clerkUserId} LIMIT 1`;
+  return result.rows[0] || null;
+}
+
+export async function createUserFromClerk(clerkUserId: string, name: string, email: string, avatar: string) {
+  const result = await sql`
+    INSERT INTO users (clerk_user_id, name, email, avatar, bio)
+    VALUES (${clerkUserId}, ${name}, ${email}, ${avatar}, 'Food enthusiast')
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function isAdmin(userId: number): Promise<boolean> {
+  const result = await sql`SELECT role FROM users WHERE id = ${userId} LIMIT 1`;
+  return result.rows[0]?.role === 'admin';
 }
 
 export async function createDish(sellerId: number, name: string, description: string, price: number, emoji: string, photoUrl: string | null) {

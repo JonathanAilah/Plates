@@ -1,89 +1,117 @@
-# Plates — Map pins v2
+# Plates — Real authentication (Clerk)
 
-Fixes two things you noticed:
-1. Only one pin on the map (should be 8)
-2. Pins didn't shrink when zooming out
+Replaces the localStorage-based fake login with proper Clerk authentication.
+This is prerequisite work for the admin page.
 
-## What changed
+## What changed conceptually
 
-**Pin sizing scales with zoom.**
-At street-level zoom (15+), pins are 64px with a visible price tail.
-At neighborhood zoom (~11-13), they shrink to ~40-55px, price tail hides.
-At city zoom (~9-10), they're 25-35px, tiny dot with a food photo.
-At regional zoom (8 and below), 20px — small circles you can pan around without visual clutter.
+**Before:** app auto-created a random anonymous user on first visit, stored `plates_user_id` in localStorage. Anyone with DevTools could impersonate any user by editing that value. Every API accepted `userId` from the client and trusted it.
 
-Icons are cached per-pin so zooming is smooth (no image reload).
+**After:** Clerk manages accounts. Users sign in with email/password or Google. Server routes use `requireSessionUser()` which reads the Clerk session, not the client. No user impersonation possible.
 
-**Seed dishes now have real locations.**
-The old seed created ONE fake seller ('Neighborhood Kitchen') with no lat/lng — that's why only your own test dish had a pin.
+**Anonymous browsing preserved.** Non-signed-in users can still browse the Discover feed. Clicking any action (order, cart, message, become seller) shows Clerk's sign-in modal.
 
-The new seed creates 8 SEPARATE cooks, each with:
-- Their own user account (Marisol, Rosa, Kemi, Lucia, Anh, Yerlan, Priya, Joe)
-- Their own kitchen name
-- A slightly offset lat/lng around Oakland's Fruitvale neighborhood
-- Their one dish tied to them
+## New files
 
-Each dish now has a real seller location, so all 8 show up as distinct pins.
+- `middleware.ts` (at repo root) — Clerk middleware, required for auth() to work in API routes
+- `lib/auth.ts` — server-side helper: `getSessionUser()`, `requireSessionUser()`, `requireAdmin()`
 
-**The new seed script also cleans up the old single-seller seed data.**
-When you re-run it, it deletes the old 'Neighborhood Kitchen' user (which also removes their location-less dishes) before creating the 8 new cooks. No manual DB cleanup needed.
+## Modified files
 
-## Files
+- `package.json` — adds `@clerk/nextjs`
+- `app/layout.tsx` — wraps everything in `<ClerkProvider>`, themed to your palette
+- `app/page.tsx` — removes localStorage init, adds anonymous Discover view, adds `<UserButton>` on Profile, calls `/api/users` GET to load the session user
+- `app/api/users/route.ts` — GET returns session user; POST uses `requireSessionUser()`
+- `app/api/dishes/route.ts` — all writes verify ownership via session
+- `app/api/cart/route.ts` — cart operations use session user
+- `app/api/orders/route.ts` — status transitions verify buyer/seller relationship
+- `app/api/messages/route.ts` — participant checks use session user
+- `lib/db.ts` — adds `clerk_user_id` and `role` columns to users; adds `getUserByClerkId`, `createUserFromClerk`, `isAdmin`
 
-- `components/MapView.tsx` — new pin sizing + zoom listener + icon caching
-- `scripts/seed-mockup-dishes.ts` — creates 8 cooks with locations, cleans up old seed
+## Prerequisites (you already did these)
 
-Both are replacements. No new files, no new dependencies.
+You added these to Vercel:
+- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+- `CLERK_SECRET_KEY`
 
-## Install
+If you want to test locally too, add them to `.env.local` as well.
 
-1. Extract this zip
-2. Copy each file into your local Plates repo at the matching path
-3. Both overwrite existing files
-4. GitHub Desktop should show 2 changed files
-5. Commit: `Zoom-responsive map pins + spread seed cooks across Bay Area`
-6. Push origin
+## How to install
 
-Vercel auto-deploys.
+1. Extract this zip.
+2. Copy each file into your local Plates repo at the matching path:
+   - `middleware.ts` — NEW, goes at repo root (same folder as `package.json`)
+   - `lib/auth.ts` — NEW
+   - `package.json` — overwrite (adds @clerk/nextjs dependency)
+   - Everything else overwrites existing files
+3. In terminal: `npm install` (picks up new dependency)
+4. GitHub Desktop should show ~10 changed files (make sure `middleware.ts` is included at repo root)
+5. Commit: `Add Clerk authentication, remove localStorage-based fake login`
+6. Push origin — Vercel auto-deploys
 
-## Re-run the seed to swap the mockup dishes
+## Critical: data migration for your existing accounts
 
-The push above deploys the MapView fix but doesn't touch your database. You still have the old single-seller seed data in there. To fix the "one pin" problem, you need to re-run the seed locally:
+**Every existing user in your DB has `clerk_user_id = NULL`.** When you sign in via Clerk after this deploys, my auth helper won't find you by Clerk ID and will create a NEW profile. Your existing dishes, orders, cart, etc. would be orphaned under the old user, and the new Clerk-linked profile would be empty.
 
-```
-npm run seed
-```
+You have two paths:
 
-You should see:
-```
-Seeding 8 mockup cooks + their dishes across the Bay Area...
-Removing old single-seller seed data...
-  removed.
+### Path A: Just start fresh (easiest)
 
-Cook: Marisol Vega
-  creating dish: Marisol Handmade Pupusas
-    image generated (~180KB)
-    dish inserted
-[...continues for 8 cooks...]
-Done. Created 8, backfilled 0, skipped 0, image failures 0.
-```
+If you don't care about your test data, skip migration. Sign in via Clerk, get a fresh profile, and re-add anything you want to keep.
 
-Costs ~$0.32 on OpenAI credit again (regenerates the images since the old dishes get deleted).
+The mockup seed dishes are unaffected because they never had Clerk users anyway — they'll still appear on the Discover feed under their original cook names.
 
-After the seed runs, hard refresh your live site. Discover → Map tab. You should see 8 pins spread across Oakland's Fruitvale neighborhood. Try zooming in and out — pins should scale smoothly.
+### Path B: Manually link your account (preserves your data)
 
-## Alternative if you don't want to spend another $0.32
+After you deploy and sign in via Clerk ONCE (so Clerk knows about you and creates your first Postgres profile), you'll want to merge your OLD test user into your new Clerk-linked one.
 
-If you'd rather NOT regenerate all 8 images, you can manually update the OLD dishes with lat/lngs instead of re-seeding. Open Neon SQL Editor and paste:
+1. Deploy this update.
+2. Visit the live site, click "Sign in" (top right), sign up with your email.
+3. This creates a NEW row in your users table for you (with `clerk_user_id` set).
+4. Open Neon SQL Editor.
+5. Find your OLD user (the one that had all your test dishes):
+   ```sql
+   SELECT id, name, email, clerk_user_id FROM users ORDER BY id;
+   ```
+6. Say old ID is 3 and new (Clerk-linked) ID is 42. Run:
+   ```sql
+   -- Transfer everything owned by old user to new user
+   UPDATE dishes SET seller_id = 42 WHERE seller_id = 3;
+   UPDATE orders SET buyer_id = 42 WHERE buyer_id = 3;
+   UPDATE cart_items SET buyer_id = 42 WHERE buyer_id = 3;
+   UPDATE messages SET sender_id = 42 WHERE sender_id = 3;
+   -- Then delete the old empty user
+   DELETE FROM users WHERE id = 3;
+   ```
+7. Refresh the app. Everything is now under your Clerk-linked account.
+
+## To make yourself admin (needed for next session's admin page)
+
+After signing in via Clerk, run in Neon SQL Editor:
 
 ```sql
-UPDATE users
-SET latitude = 37.7757, longitude = -122.2251
-WHERE email = 'seed-mockup@plates.local';
+UPDATE users SET role = 'admin' WHERE clerk_user_id = 'YOUR_CLERK_ID_HERE';
 ```
 
-This gives ALL 8 dishes the same location (they all stack on one pin, since they all share the same seller). Not ideal but zero cost. Skip the seed re-run entirely — just push and deploy the MapView fix.
+To find your Clerk ID: Neon SQL Editor → `SELECT id, name, clerk_user_id FROM users WHERE clerk_user_id IS NOT NULL;` — that returns your row after you've signed in.
 
-## What NOT to do
+## What to test after deploying
 
-Don't run BOTH the SQL update above and the seed script. The seed would delete the just-updated seller. Pick one path.
+1. Open the site in an incognito window (no cookies) — you should see the anonymous Discover view with a "Sign in" button top-right and a "Sign in to order" chip on each dish.
+2. Click Sign in. Clerk modal opens. Try email/password sign-up.
+3. After signing up, you should see the full app (bottom nav appears, tap into a dish, order it, etc.).
+4. Try DevTools → Application → LocalStorage — no `plates_user_id` anymore.
+5. On Profile tab, top-right you see your Clerk avatar/UserButton — click it to see the "Sign out" option.
+6. Try Google sign-in in another incognito window.
+
+## Known followups
+
+- **Admin page** is next session's work. This just laid the groundwork with the `role` column and `requireAdmin()` helper.
+- The old anonymous-created users in your DB are still there, taking up rows. Optional cleanup: `DELETE FROM users WHERE clerk_user_id IS NULL AND email LIKE 'user_%@plates.local';` (deletes only the auto-created anonymous accounts, leaves your seed cooks intact).
+- On first sign-in, Clerk gives us a first name — we use it as the app's `name` field. Users can edit it on their Profile screen if they want.
+
+## Rollback plan
+
+If anything breaks and you want to revert quickly:
+1. Vercel Deployments → find the previous good deploy → the ⋯ menu → "Promote to Production"
+2. Your database still has the new `clerk_user_id` and `role` columns, but they're additive — the old code just ignores them.

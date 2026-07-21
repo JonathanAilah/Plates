@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn } from 'lucide-react';
+import { SignInButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 
@@ -390,69 +391,49 @@ export default function Home() {
   useEffect(() => {
     const initApp = async () => {
       try {
+        // Public: ensures DB schema is up to date
         await fetch('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'init' }),
         });
 
-        let currentUser: User | null = null;
-        const storedUserId = localStorage.getItem('plates_user_id');
+        // Load dishes (public — no auth required)
+        const dishRes = await fetch('/api/dishes?action=getAll');
+        const dishData = await dishRes.json();
+        setDishes(Array.isArray(dishData) ? dishData : []);
 
-        if (storedUserId && storedUserId !== 'undefined' && storedUserId !== 'null') {
-          const res = await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'get', id: storedUserId }),
-          });
-          currentUser = await res.json();
-        } else {
-          const res = await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'create',
-              name: 'You',
-              email: `user_${Date.now()}@plates.local`,
-              avatar: 'Y',
-            }),
-          });
-          currentUser = await res.json();
-          if (currentUser) localStorage.setItem('plates_user_id', String(currentUser.id));
-        }
+        // Load the current signed-in user (returns null if anonymous)
+        const meRes = await fetch('/api/users');
+        const currentUser: User | null = meRes.ok ? await meRes.json() : null;
 
         setUser(currentUser);
         if (currentUser) {
           setProfileName(currentUser.name);
           setProfileBio(currentUser.bio || '');
           loadCart(currentUser.id);
-        }
 
-        const dishRes = await fetch('/api/dishes?action=getAll');
-        const dishData = await dishRes.json();
-        setDishes(Array.isArray(dishData) ? dishData : []);
-
-        if (currentUser && navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-            async (pos) => {
-              const { latitude, longitude } = pos.coords;
-              try {
-                const res = await fetch('/api/users', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    action: 'updateLocation',
-                    id: currentUser!.id,
-                    latitude, longitude,
-                  }),
-                });
-                const updated = await res.json();
-                setUser(updated);
-              } catch (e) { console.error(e); }
-            },
-            () => {},
-            { timeout: 8000 }
-          );
+          // Ask for location if we don't already have one
+          if (currentUser.latitude == null && navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              async (pos) => {
+                const { latitude, longitude } = pos.coords;
+                try {
+                  const res = await fetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
+                  });
+                  if (res.ok) {
+                    const updated = await res.json();
+                    setUser(updated);
+                  }
+                } catch (e) { console.error(e); }
+              },
+              () => {},
+              { timeout: 8000 }
+            );
+          }
         }
       } catch (error) {
         console.error('Init error:', error);
@@ -965,13 +946,73 @@ export default function Home() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.page, color: C.muted }}>
         <div style={{ textAlign: 'center' }}>
           <ChefHat size={44} style={{ marginBottom: 14, color: C.terracotta, opacity: .8 }} />
-          <p style={{ fontFamily: font.sans, fontSize: 15 }}>Starting your kitchen…</p>
+          <p style={{ fontFamily: font.sans, fontSize: 15 }}>Loading…</p>
         </div>
       </div>
     );
   }
 
-  if (!user) return null;
+  // ANONYMOUS BROWSING: if no signed-in user, show a minimal Discover-only view.
+  // Actions like Add to cart / Message / Order require sign-in.
+  if (!user) {
+    return (
+      <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
+        <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative', paddingBottom: 40 }}>
+          <div style={{ padding: '20px 20px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ font: `500 25px/1 ${font.serif}`, color: C.terracotta, letterSpacing: '-.01em' }}>Plates</div>
+            <SignInButton mode="modal">
+              <button style={{ background: C.terracotta, color: '#fff', padding: '8px 14px', borderRadius: 20, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <LogIn size={14} /> Sign in
+              </button>
+            </SignInButton>
+          </div>
+
+          <div style={{ padding: '12px 20px 0' }}>
+            <div style={{ background: '#fff', borderRadius: 14, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 10, color: C.muted, font: `400 13.5px ${font.sans}`, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
+              <Search size={15} color={C.terracotta} strokeWidth={2.5} />
+              Browse home-cooked meals near you
+            </div>
+          </div>
+
+          <div style={{ padding: '18px 20px 10px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+            <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>Fresh from the block</div>
+          </div>
+
+          <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {dishes.map(dish => (
+              <div key={dish.id} style={{ background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
+                <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
+                  {dish.photo_url ? (
+                    <div style={{ width: '100%', height: '100%', backgroundImage: `url(${dish.photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center', borderRadius: 13 }} />
+                  ) : (
+                    <div style={{ width: '100%', height: '100%', borderRadius: 13, background: 'repeating-linear-gradient(45deg,#ece3d5,#ece3d5 9px,#f2ebde 9px,#f2ebde 18px)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>{dish.emoji}</div>
+                  )}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                    <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                  </div>
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 6 }}>
+                    {dish.seller_name}
+                  </div>
+                  <SignInButton mode="modal">
+                    <button style={{ marginTop: 9, background: C.terracottaLight, color: C.terracotta, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
+                      Sign in to order
+                    </button>
+                  </SignInButton>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ padding: '20px 20px 0', textAlign: 'center', color: C.muted, font: `400 12px ${font.sans}` }}>
+            Sign in to order, save favorites, and become a cook.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const heroDish = dishes[0] || null;
   const otherDishes = dishes.slice(heroDish ? 1 : 0);
@@ -1490,7 +1531,11 @@ export default function Home() {
               <button onClick={() => setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
                 <ArrowLeft size={18} />
               </button>
-              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Your profile</div>
+              <div style={{ flex: 1, font: `500 22px ${font.serif}`, color: C.ink }}>Your profile</div>
+              <UserButton
+                afterSignOutUrl="/"
+                appearance={{ elements: { avatarBox: { width: 36, height: 36 } } }}
+              />
             </div>
 
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
