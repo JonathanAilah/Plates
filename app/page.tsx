@@ -52,6 +52,36 @@ interface UnreviewedOrder {
   seller_kitchen_name: string | null;
 }
 
+interface Post {
+  id: number;
+  user_id: number;
+  body: string;
+  photo_url: string | null;
+  created_at: string;
+  expires_at: string;
+  author_name: string;
+  author_avatar: string;
+  author_photo_url: string | null;
+  author_seller_status: string;
+  author_kitchen_name: string | null;
+  heart_count: number;
+  fire_count: number;
+  hands_count: number;
+  comment_count: number;
+  viewer_reactions: string[]; // ['heart', 'fire', 'hands'] the current viewer has toggled
+}
+
+interface PostComment {
+  id: number;
+  post_id: number;
+  user_id: number;
+  body: string;
+  created_at: string;
+  author_name: string;
+  author_avatar: string;
+  author_photo_url: string | null;
+}
+
 interface CartItem {
   cart_item_id: number;
   id: number;
@@ -351,6 +381,26 @@ export default function Home() {
   const [ratingComment, setRatingComment] = useState('');
   const [ratingSubmitting, setRatingSubmitting] = useState(false);
   const [dismissedRatings, setDismissedRatings] = useState<string[]>([]);
+
+  // Discover search + filters
+  const [searchQuery, setSearchQuery] = useState('');
+  const [distanceFilter, setDistanceFilter] = useState<'any' | '1mi' | '3mi' | '5mi'>('any');
+  const [dietaryFilter, setDietaryFilter] = useState<string[]>([]); // e.g. ['Nut-free', 'Gluten-free']
+  const [ratingFilter, setRatingFilter] = useState<'any' | '4plus' | '4half'>('any');
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+
+  // Community feed
+  const [homeTab, setHomeTab] = useState<'discover' | 'feed'>('discover');
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [composerText, setComposerText] = useState('');
+  const [composerPhoto, setComposerPhoto] = useState<string | null>(null);
+  const [composerPhotoName, setComposerPhotoName] = useState<string | null>(null);
+  const [composerPosting, setComposerPosting] = useState(false);
+  const composerFileInputRef = useRef<HTMLInputElement>(null);
+  const [expandedCommentsFor, setExpandedCommentsFor] = useState<number | null>(null);
+  const [postComments, setPostComments] = useState<Record<number, PostComment[]>>({});
+  const [commentDraft, setCommentDraft] = useState<Record<number, string>>({});
+  const [commentPosting, setCommentPosting] = useState<number | null>(null);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -671,6 +721,197 @@ export default function Home() {
     setPendingRating(null);
   };
 
+  // ============ COMMUNITY FEED ============
+
+  const loadFeed = async () => {
+    try {
+      const res = await fetch('/api/posts?action=feed');
+      const data = await res.json();
+      setPosts(Array.isArray(data) ? data : []);
+    } catch (e) { console.error('Feed load error:', e); }
+  };
+
+  // Photo picker (reuses similar pattern as dish photo)
+  const handleComposerPhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      showToast('Photo must be under 3MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      // Downscale via canvas for consistency (max 1200px longest side)
+      const img = new Image();
+      img.onload = () => {
+        const maxSide = 1200;
+        let w = img.width, h = img.height;
+        if (w > maxSide || h > maxSide) {
+          if (w > h) { h = Math.round(h * (maxSide / w)); w = maxSide; }
+          else { w = Math.round(w * (maxSide / h)); h = maxSide; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          setComposerPhoto(canvas.toDataURL('image/jpeg', 0.85));
+        } else {
+          setComposerPhoto(result);
+        }
+        setComposerPhotoName(file.name);
+      };
+      img.src = result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const publishPost = async () => {
+    if (!user || composerPosting) return;
+    const text = composerText.trim();
+    if (!text) {
+      showToast('Add some text');
+      return;
+    }
+    setComposerPosting(true);
+    try {
+      const res = await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', text, photoUrl: composerPhoto }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Could not post');
+        return;
+      }
+      setComposerText('');
+      setComposerPhoto(null);
+      setComposerPhotoName(null);
+      showToast('Posted');
+      await loadFeed();
+    } catch (e) {
+      console.error('Publish post error:', e);
+      showToast('Network error');
+    } finally {
+      setComposerPosting(false);
+    }
+  };
+
+  const reactToPost = async (postId: number, kind: 'heart' | 'fire' | 'hands') => {
+    if (!user) return;
+    // Optimistic update
+    setPosts(prev => prev.map(p => {
+      if (p.id !== postId) return p;
+      const active = p.viewer_reactions.includes(kind);
+      const countKey = kind === 'heart' ? 'heart_count' : kind === 'fire' ? 'fire_count' : 'hands_count';
+      return {
+        ...p,
+        viewer_reactions: active ? p.viewer_reactions.filter(k => k !== kind) : [...p.viewer_reactions, kind],
+        [countKey]: (p as any)[countKey] + (active ? -1 : 1),
+      };
+    }));
+    try {
+      await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'react', postId, kind }),
+      });
+    } catch (e) {
+      console.error('React error:', e);
+      // Roll back on error by reloading
+      loadFeed();
+    }
+  };
+
+  const toggleComments = async (postId: number) => {
+    if (expandedCommentsFor === postId) {
+      setExpandedCommentsFor(null);
+      return;
+    }
+    setExpandedCommentsFor(postId);
+    // Load comments if we don't have them yet
+    if (!postComments[postId]) {
+      try {
+        const res = await fetch(`/api/posts?action=comments&postId=${postId}`);
+        const data = await res.json();
+        setPostComments(prev => ({ ...prev, [postId]: Array.isArray(data) ? data : [] }));
+      } catch (e) { console.error('Comments load error:', e); }
+    }
+  };
+
+  const publishComment = async (postId: number) => {
+    if (!user || commentPosting === postId) return;
+    const text = (commentDraft[postId] || '').trim();
+    if (!text) return;
+    setCommentPosting(postId);
+    try {
+      const res = await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'comment', postId, text }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Could not comment');
+        return;
+      }
+      // Reload comments + bump the count locally
+      const listRes = await fetch(`/api/posts?action=comments&postId=${postId}`);
+      const list = await listRes.json();
+      setPostComments(prev => ({ ...prev, [postId]: Array.isArray(list) ? list : [] }));
+      setPosts(prev => prev.map(p => p.id === postId ? { ...p, comment_count: p.comment_count + 1 } : p));
+      setCommentDraft(prev => ({ ...prev, [postId]: '' }));
+    } catch (e) {
+      console.error('Comment error:', e);
+      showToast('Network error');
+    } finally {
+      setCommentPosting(null);
+    }
+  };
+
+  const deletePostAction = async (postId: number) => {
+    if (!user) return;
+    if (!confirm('Delete this post?')) return;
+    try {
+      const res = await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', postId }),
+      });
+      if (res.ok) {
+        setPosts(prev => prev.filter(p => p.id !== postId));
+        showToast('Post deleted');
+      }
+    } catch (e) { console.error('Delete post error:', e); }
+  };
+
+  const deleteCommentAction = async (postId: number, commentId: number) => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'deleteComment', commentId }),
+      });
+      if (res.ok) {
+        setPostComments(prev => ({ ...prev, [postId]: (prev[postId] || []).filter(c => c.id !== commentId) }));
+        setPosts(prev => prev.map(p => p.id === postId ? { ...p, comment_count: Math.max(0, p.comment_count - 1) } : p));
+      }
+    } catch (e) { console.error('Delete comment error:', e); }
+  };
+
+  // Format "expires in Xh Ym" or "expires in Xm"
+  const expiresIn = (expiresAtIso: string): string => {
+    const ms = new Date(expiresAtIso).getTime() - Date.now();
+    if (ms <= 0) return 'expiring…';
+    const mins = Math.floor(ms / 60000);
+    const hours = Math.floor(mins / 60);
+    if (hours <= 0) return `${mins}m left`;
+    return `${hours}h left`;
+  };
+
   const markThreadRead = async (orderId: string, userId: number) => {
     try {
       await fetch('/api/messages', {
@@ -822,6 +1063,18 @@ export default function Home() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, user?.id, chatOrder?.id]);
+
+  // Load feed when switching to it (and poll while on it)
+  useEffect(() => {
+    if (screen !== 'feed' || homeTab !== 'feed') return;
+    loadFeed();
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      loadFeed();
+    }, 20000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, homeTab]);
 
   // Background unread-count polling (any screen, so badges appear in nav / order lists)
   useEffect(() => {
@@ -1333,103 +1586,7 @@ export default function Home() {
     );
   }
 
-  // ANONYMOUS BROWSING: if no signed-in user, show a minimal Discover-only view.
-  // Actions like Add to cart / Message / Order require sign-in.
-  if (!user) {
-    return (
-      <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
-        <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative', paddingBottom: 40 }}>
-          <div style={{ padding: '20px 20px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ font: `500 25px/1 ${font.serif}`, color: C.terracotta, letterSpacing: '-.01em' }}>Plates</div>
-            <SignInButton mode="modal">
-              <button style={{ background: C.terracotta, color: '#fff', padding: '8px 14px', borderRadius: 20, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <LogIn size={14} /> Sign in
-              </button>
-            </SignInButton>
-          </div>
-
-          <div style={{ padding: '12px 20px 0' }}>
-            <div style={{ background: '#fff', borderRadius: 14, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 10, color: C.muted, font: `400 13.5px ${font.sans}`, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
-              <Search size={15} color={C.terracotta} strokeWidth={2.5} />
-              Browse home-cooked meals near you
-            </div>
-          </div>
-
-          <div style={{ padding: '18px 20px 10px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-            <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>Fresh from the block</div>
-          </div>
-
-          <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {dishes.map(dish => (
-              <div key={dish.id} style={{ background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
-                <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
-                  {dish.photo_url ? (
-                    <div style={{ width: '100%', height: '100%', backgroundImage: `url(${dish.photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center', borderRadius: 13 }} />
-                  ) : (
-                    <div style={{ width: '100%', height: '100%', borderRadius: 13, background: 'repeating-linear-gradient(45deg,#ece3d5,#ece3d5 9px,#f2ebde 9px,#f2ebde 18px)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 40 }}>{dish.emoji}</div>
-                  )}
-                </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                    <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
-                    <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
-                  </div>
-                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 6 }}>
-                    {dish.seller_name}
-                  </div>
-                  <SignInButton mode="modal">
-                    <button style={{ marginTop: 9, background: C.terracottaLight, color: C.terracotta, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
-                      Sign in to order
-                    </button>
-                  </SignInButton>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ padding: '20px 20px 0', textAlign: 'center', color: C.muted, font: `400 12px ${font.sans}` }}>
-            Sign in to order, save favorites, and become a cook.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const heroDish = dishes[0] || null;
-  const otherDishes = dishes.slice(heroDish ? 1 : 0);
-
-  const statusLabels: Record<OrderStatus, string> = {
-    placed: 'Order placed',
-    accepted: 'Cook accepted',
-    cooking: 'Cooking',
-    ready: 'Ready for pickup',
-    picked_up: 'Picked up',
-    cancelled: 'Cancelled',
-  };
-
-  const statusColors: Record<OrderStatus, string> = {
-    placed: C.terracotta,
-    accepted: C.terracotta,
-    cooking: '#e6944c',
-    ready: C.green,
-    picked_up: C.muted,
-    cancelled: '#c94b4b',
-  };
-
-  const activeCount = orders.filter(o => o.status !== 'picked_up' && o.status !== 'cancelled').length;
-  const cookActiveCount = cookOrders.filter(o => o.status !== 'picked_up' && o.status !== 'cancelled').length;
-
-  const timeAgo = (iso: string): string => {
-    const then = new Date(iso).getTime();
-    const now = Date.now();
-    const mins = Math.max(0, Math.round((now - then) / 60000));
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.round(hrs / 24);
-    return `${days}d ago`;
-  };
+  // ===== Small display helpers used by both anonymous and signed-in views =====
 
   // Compact rating chip: "★ 4.6 (12)" or "New" if no reviews yet
   const RatingChip = ({ dish, size = 11 }: { dish: { avg_rating?: number | string | null; review_count?: number }; size?: number }) => {
@@ -1492,6 +1649,248 @@ export default function Home() {
     );
   };
 
+  // ANONYMOUS BROWSING: if no signed-in user, show the Discover feed with the same
+  // hero + map + list experience — just gated actions (order/message/become seller).
+  if (!user) {
+    const anonHeroDish = dishes[0] || null;
+    const anonOtherDishes = dishes.slice(anonHeroDish ? 1 : 0);
+    const anonPins = dishes
+      .filter(d => d.seller_latitude != null && d.seller_longitude != null)
+      .map(d => ({
+        id: d.id,
+        lat: d.seller_latitude!,
+        lng: d.seller_longitude!,
+        photoUrl: d.photo_url,
+        emoji: d.emoji,
+        label: `$${Number(d.price).toFixed(0)}`,
+      }));
+
+    return (
+      <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
+        <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative', paddingBottom: 60 }}>
+          {/* Header */}
+          <div style={{ padding: '20px 20px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ font: `500 25px/1 ${font.serif}`, color: C.terracotta, letterSpacing: '-.01em' }}>Plates</div>
+            <SignInButton mode="modal">
+              <button style={{ background: C.terracotta, color: '#fff', padding: '8px 14px', borderRadius: 20, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <LogIn size={14} /> Sign in
+              </button>
+            </SignInButton>
+          </div>
+
+          {/* Search bar (display only for anonymous — sign in prompt on interact) */}
+          <div style={{ padding: '12px 20px 0' }}>
+            <SignInButton mode="modal">
+              <div style={{ cursor: 'pointer', background: '#fff', borderRadius: 14, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 10, color: C.muted, font: `400 13.5px ${font.sans}`, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
+                <Search size={15} color={C.terracotta} strokeWidth={2.5} />
+                Search dishes, cooks, cuisines…
+              </div>
+            </SignInButton>
+          </div>
+
+          {/* Hero: Cook of the day */}
+          {anonHeroDish && (
+            <div style={{ padding: '16px 20px 0' }}>
+              <SignInButton mode="modal">
+                <div style={{ cursor: 'pointer', position: 'relative', borderRadius: 22, overflow: 'hidden', boxShadow: '0 8px 22px rgba(60,40,20,.16)' }}>
+                  <PhotoTile dish={anonHeroDish} height={224} radius={0} />
+                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 36%,rgba(30,15,5,.76))' }} />
+                  <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 10px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
+                  <div style={{ position: 'absolute', left: 16, right: 16, bottom: 15, color: '#fff' }}>
+                    <div style={{ font: `500 22px/1.08 ${font.serif}` }}>{anonHeroDish.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 12.5px ${font.sans}`, opacity: .95 }}>
+                      {anonHeroDish.seller_photo_url ? (
+                        <span style={{ width: 23, height: 23, borderRadius: '50%', backgroundImage: `url(${anonHeroDish.seller_photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+                      ) : (
+                        <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}` }}>{anonHeroDish.seller_avatar}</span>
+                      )}
+                      {anonHeroDish.seller_name}
+                      {(anonHeroDish.review_count ?? 0) > 0 && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                          · <Star size={12} fill={C.gold} color={C.gold} /> {Number(anonHeroDish.avg_rating || 0).toFixed(1)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </SignInButton>
+            </div>
+          )}
+
+          {/* List / Map toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
+            <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>Fresh from the block</div>
+            <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
+              <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}` }}>
+                List
+              </button>
+              <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}` }}>
+                Map
+              </button>
+            </div>
+          </div>
+
+          {/* Map or list */}
+          {feedView === 'map' ? (
+            <div style={{ padding: '0 20px 8px' }}>
+              <MapView
+                height={380}
+                radius={18}
+                userLat={null}
+                userLng={null}
+                pins={anonPins}
+              />
+              {anonPins.length === 0 && dishes.length > 0 && (
+                <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
+                  Cooks haven&apos;t shared their locations yet.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {anonOtherDishes.map(dish => (
+                <SignInButton mode="modal" key={dish.id}>
+                  <div style={{ cursor: 'pointer', background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
+                    <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
+                      <PhotoTile dish={dish} height={96} radius={13} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                        <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                        <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
+                        {dish.seller_photo_url ? (
+                          <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
+                        ) : (
+                          <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
+                        )}
+                        {dish.seller_name}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
+                        <RatingChip dish={dish} size={11} />
+                        <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
+                      </div>
+                    </div>
+                  </div>
+                </SignInButton>
+              ))}
+              {dishes.length === 0 && (
+                <div style={{ padding: '30px 24px', textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No dishes to show yet.
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ padding: '24px 20px 20px', textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}` }}>
+            Sign in to order, save favorites, and become a cook.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Available dietary tags — derived from what any seed cook has, so we don't hardcode
+  const availableDietaryTags = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const d of dishes) {
+      if (d.seller_kitchen_flags) {
+        d.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).forEach(f => set.add(f));
+      }
+    }
+    return Array.from(set).sort();
+  }, [dishes]);
+
+  // Applied filters count (for showing on the filter chip)
+  const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length;
+
+  // Filtered dish list
+  const filteredDishes = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return dishes.filter(d => {
+      // Search: name OR cook name
+      if (q) {
+        const nameMatch = d.name.toLowerCase().includes(q);
+        const cookMatch = (d.seller_name || '').toLowerCase().includes(q);
+        if (!nameMatch && !cookMatch) return false;
+      }
+
+      // Distance
+      if (distanceFilter !== 'any') {
+        if (user.latitude == null || user.longitude == null || d.seller_latitude == null || d.seller_longitude == null) return false;
+        const dist = distanceMiles(user.latitude, user.longitude, d.seller_latitude, d.seller_longitude);
+        const maxMi = distanceFilter === '1mi' ? 1 : distanceFilter === '3mi' ? 3 : 5;
+        if (dist > maxMi) return false;
+      }
+
+      // Rating
+      if (ratingFilter !== 'any') {
+        const avg = Number(d.avg_rating || 0);
+        const threshold = ratingFilter === '4plus' ? 4 : 4.5;
+        if (avg < threshold) return false;
+      }
+
+      // Dietary — dish must have ALL selected tags
+      if (dietaryFilter.length > 0) {
+        const dishTags = (d.seller_kitchen_flags || '').split(',').map(f => f.trim());
+        for (const tag of dietaryFilter) {
+          if (!dishTags.includes(tag)) return false;
+        }
+      }
+
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dishes, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user.latitude, user.longitude]);
+
+  const isFiltering = searchQuery.trim().length > 0 || activeFilterCount > 0;
+  const heroDish = isFiltering ? null : (dishes[0] || null);
+  const otherDishes = isFiltering ? filteredDishes : dishes.slice(heroDish ? 1 : 0);
+
+  const clearFilters = () => {
+    setDistanceFilter('any');
+    setDietaryFilter([]);
+    setRatingFilter('any');
+  };
+
+  const toggleDietaryTag = (tag: string) => {
+    setDietaryFilter(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+  };
+
+  const statusLabels: Record<OrderStatus, string> = {
+    placed: 'Order placed',
+    accepted: 'Cook accepted',
+    cooking: 'Cooking',
+    ready: 'Ready for pickup',
+    picked_up: 'Picked up',
+    cancelled: 'Cancelled',
+  };
+
+  const statusColors: Record<OrderStatus, string> = {
+    placed: C.terracotta,
+    accepted: C.terracotta,
+    cooking: '#e6944c',
+    ready: C.green,
+    picked_up: C.muted,
+    cancelled: '#c94b4b',
+  };
+
+  const activeCount = orders.filter(o => o.status !== 'picked_up' && o.status !== 'cancelled').length;
+  const cookActiveCount = cookOrders.filter(o => o.status !== 'picked_up' && o.status !== 'cancelled').length;
+
+  const timeAgo = (iso: string): string => {
+    const then = new Date(iso).getTime();
+    const now = Date.now();
+    const mins = Math.max(0, Math.round((now - then) / 60000));
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.round(hrs / 24);
+    return `${days}d ago`;
+  };
+
   return (
     <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
       <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative' }}>
@@ -1525,12 +1924,101 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Discover / Feed tab toggle */}
+            <div style={{ padding: '10px 20px 0', display: 'flex', gap: 24, borderBottom: `1px solid ${C.hairline}` }}>
+              <button
+                onClick={() => setHomeTab('discover')}
+                style={{
+                  padding: '10px 0',
+                  background: 'transparent',
+                  color: homeTab === 'discover' ? C.ink : C.muted,
+                  font: `500 15px ${font.serif}`,
+                  borderBottom: homeTab === 'discover' ? `2px solid ${C.terracotta}` : '2px solid transparent',
+                  marginBottom: -1,
+                }}
+              >
+                Discover
+              </button>
+              <button
+                onClick={() => setHomeTab('feed')}
+                style={{
+                  padding: '10px 0',
+                  background: 'transparent',
+                  color: homeTab === 'feed' ? C.ink : C.muted,
+                  font: `500 15px ${font.serif}`,
+                  borderBottom: homeTab === 'feed' ? `2px solid ${C.terracotta}` : '2px solid transparent',
+                  marginBottom: -1,
+                }}
+              >
+                Feed
+              </button>
+            </div>
+
+            {homeTab === 'discover' && (<>
             <div style={{ padding: '12px 20px 0' }}>
-              <div style={{ background: '#fff', borderRadius: 14, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 10, color: C.muted, font: `400 13.5px ${font.sans}`, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
+              <div style={{ background: '#fff', borderRadius: 14, padding: '10px 15px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
                 <Search size={15} color={C.terracotta} strokeWidth={2.5} />
-                Search dishes, cooks, cuisines…
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search dishes or cooks…"
+                  style={{ flex: 1, border: 'none', outline: 'none', font: `400 13.5px ${font.sans}`, background: 'transparent', color: C.ink, minWidth: 0 }}
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery('')} style={{ color: C.muted, padding: 2, display: 'flex' }}>
+                    <X size={15} />
+                  </button>
+                )}
               </div>
             </div>
+
+            {/* Filter chips */}
+            <div style={{ padding: '10px 20px 0', display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none' }}>
+              <button
+                onClick={() => setShowFilterPanel(true)}
+                style={{
+                  flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px',
+                  background: activeFilterCount > 0 ? C.ink : C.card,
+                  color: activeFilterCount > 0 ? '#fff' : C.inkSoft,
+                  border: `1px solid ${activeFilterCount > 0 ? C.ink : C.divider}`,
+                  borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap'
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+                </svg>
+                Filters
+                {activeFilterCount > 0 && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 16, height: 16, borderRadius: 8, background: '#fff', color: C.ink, font: `700 10px ${font.sans}`, padding: '0 4px' }}>{activeFilterCount}</span>
+                )}
+              </button>
+
+              {distanceFilter !== 'any' && (
+                <button onClick={() => setDistanceFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  Within {distanceFilter === '1mi' ? '1 mi' : distanceFilter === '3mi' ? '3 mi' : '5 mi'}
+                  <X size={11} />
+                </button>
+              )}
+              {ratingFilter !== 'any' && (
+                <button onClick={() => setRatingFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  {ratingFilter === '4plus' ? '4+ stars' : '4.5+ stars'}
+                  <X size={11} />
+                </button>
+              )}
+              {dietaryFilter.map(tag => (
+                <button key={tag} onClick={() => toggleDietaryTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  {tag}
+                  <X size={11} />
+                </button>
+              ))}
+            </div>
+
+            {isFiltering && (
+              <div style={{ padding: '10px 20px 0', font: `400 12px ${font.sans}`, color: C.muted }}>
+                {filteredDishes.length === 0 ? 'No dishes match' : `${filteredDishes.length} result${filteredDishes.length === 1 ? '' : 's'}`}
+              </div>
+            )}
 
             {heroDish && (
               <div style={{ padding: '16px 20px 0' }}>
@@ -1562,7 +2050,7 @@ export default function Home() {
             )}
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
-              <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>Fresh from the block</div>
+              <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>{isFiltering ? 'Results' : 'Fresh from the block'}</div>
               <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
                 <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
                   List
@@ -1576,6 +2064,18 @@ export default function Home() {
             {dishes.length === 0 && (
               <div style={{ padding: '0 20px 8px', font: `400 12px ${font.sans}`, color: C.muted }}>No dishes yet</div>
             )}
+            {isFiltering && filteredDishes.length === 0 && dishes.length > 0 && (
+              <div style={{ padding: '30px 24px', textAlign: 'center' }}>
+                <Search size={30} color={C.muted} style={{ opacity: .4, marginBottom: 10 }} />
+                <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 4 }}>No matches</div>
+                <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 12 }}>Try different keywords or clear a filter.</div>
+                {activeFilterCount > 0 && (
+                  <button onClick={clearFilters} style={{ padding: '8px 16px', background: C.terracotta, color: '#fff', borderRadius: 20, font: `500 12.5px ${font.sans}` }}>
+                    Clear filters
+                  </button>
+                )}
+              </div>
+            )}
 
             {feedView === 'map' ? (
               <div style={{ padding: '0 20px 8px' }}>
@@ -1584,7 +2084,7 @@ export default function Home() {
                   radius={18}
                   userLat={user.latitude}
                   userLng={user.longitude}
-                  pins={dishes
+                  pins={(isFiltering ? filteredDishes : dishes)
                     .filter(d => d.seller_latitude != null && d.seller_longitude != null)
                     .map(d => ({
                       id: d.id,
@@ -1596,9 +2096,9 @@ export default function Home() {
                       onClick: () => openMeal(d),
                     }))}
                 />
-                {dishes.filter(d => d.seller_latitude != null).length === 0 && dishes.length > 0 && (
+                {(isFiltering ? filteredDishes : dishes).filter(d => d.seller_latitude != null).length === 0 && dishes.length > 0 && (
                   <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
-                    No cooks have shared a location yet. Ask cooks to enable location in their kitchen setup.
+                    {isFiltering ? 'No dishes match your filters on the map.' : 'No cooks have shared a location yet. Ask cooks to enable location in their kitchen setup.'}
                   </div>
                 )}
               </div>
@@ -1649,6 +2149,224 @@ export default function Home() {
                 <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>{user.isSeller ? 'Kitchen' : 'Start cooking'}</div>
               </div>
             </div>
+            </>)}
+
+            {/* ================= COMMUNITY FEED (inside Discover screen) ================= */}
+            {homeTab === 'feed' && (
+              <div style={{ padding: '0 0 20px' }}>
+                {/* Composer */}
+                <div style={{ padding: '14px 20px 0' }}>
+                  <div style={{ background: C.card, borderRadius: 16, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                      {user.photo_url ? (
+                        <span style={{ width: 36, height: 36, borderRadius: '50%', backgroundImage: `url(${user.photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                      ) : (
+                        <span style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 13px ${font.sans}`, flex: 'none' }}>{user.avatar}</span>
+                      )}
+                      <textarea
+                        value={composerText}
+                        onChange={(e) => setComposerText(e.target.value)}
+                        placeholder="What are you cooking today?"
+                        rows={2}
+                        maxLength={500}
+                        style={{ flex: 1, border: 'none', outline: 'none', font: `400 14px/1.4 ${font.sans}`, background: 'transparent', resize: 'none' }}
+                      />
+                    </div>
+                    {composerPhoto && (
+                      <div style={{ position: 'relative', marginTop: 10 }}>
+                        <img src={composerPhoto} alt="preview" style={{ width: '100%', borderRadius: 12, maxHeight: 300, objectFit: 'cover' }} />
+                        <button
+                          onClick={() => { setComposerPhoto(null); setComposerPhotoName(null); }}
+                          style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, background: 'rgba(0,0,0,.6)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+                      <button
+                        onClick={() => composerFileInputRef.current?.click()}
+                        style={{ padding: '6px 10px', background: C.surface, color: C.inkSoft, borderRadius: 10, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 5 }}
+                      >
+                        <Camera size={14} /> {composerPhoto ? 'Change photo' : 'Add photo'}
+                      </button>
+                      <input ref={composerFileInputRef} type="file" accept="image/*" onChange={handleComposerPhotoChange} style={{ display: 'none' }} />
+                      <div style={{ flex: 1, font: `400 11px ${font.sans}`, color: C.muted }}>
+                        {composerText.length}/500 · posts vanish after 24hr
+                      </div>
+                      <button
+                        onClick={publishPost}
+                        disabled={!composerText.trim() || composerPosting}
+                        style={{ padding: '8px 16px', background: composerText.trim() && !composerPosting ? C.terracotta : C.cardAlt, color: composerText.trim() && !composerPosting ? '#fff' : C.mutedLight, borderRadius: 20, font: `500 12.5px ${font.sans}` }}
+                      >
+                        {composerPosting ? 'Posting…' : 'Post'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Feed */}
+                <div style={{ padding: '14px 20px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {posts.length === 0 ? (
+                    <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted }}>
+                      <ChefHat size={30} style={{ opacity: .4, marginBottom: 10 }} />
+                      <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>The feed is quiet</div>
+                      <div style={{ font: `400 12px ${font.sans}`, marginTop: 4 }}>Be the first to share what you&apos;re making today.</div>
+                    </div>
+                  ) : (
+                    posts.map(p => {
+                      const isMine = p.user_id === user.id;
+                      const canModerate = isMine || user.role === 'admin';
+                      const isCook = p.author_seller_status === 'approved';
+                      const isExpanded = expandedCommentsFor === p.id;
+                      const comments = postComments[p.id] || [];
+
+                      const ReactionBtn = ({ kind, count, label, emoji }: { kind: 'heart' | 'fire' | 'hands'; count: number; label: string; emoji: string }) => {
+                        const active = p.viewer_reactions.includes(kind);
+                        return (
+                          <button
+                            onClick={() => reactToPost(p.id, kind)}
+                            aria-label={label}
+                            style={{
+                              display: 'flex', alignItems: 'center', gap: 5,
+                              padding: '5px 10px',
+                              background: active ? C.terracottaLight : C.surface,
+                              border: `1px solid ${active ? C.terracotta : C.divider}`,
+                              color: active ? C.terracotta : C.inkSoft,
+                              borderRadius: 20,
+                              font: `500 12px ${font.sans}`,
+                            }}
+                          >
+                            <span style={{ fontSize: 14, lineHeight: 1 }}>{emoji}</span>
+                            {count > 0 && <span>{count}</span>}
+                          </button>
+                        );
+                      };
+
+                      return (
+                        <div key={p.id} style={{ background: C.card, borderRadius: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)', overflow: 'hidden' }}>
+                          {/* Header */}
+                          <div style={{ padding: '12px 14px 8px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                            {p.author_photo_url ? (
+                              <span style={{ width: 38, height: 38, borderRadius: '50%', backgroundImage: `url(${p.author_photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                            ) : (
+                              <span style={{ width: 38, height: 38, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 14px ${font.sans}`, flex: 'none' }}>{p.author_avatar}</span>
+                            )}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <span style={{ font: `500 13.5px ${font.serif}`, color: C.ink }}>{p.author_kitchen_name || p.author_name}</span>
+                                {isCook && (
+                                  <span style={{ padding: '1px 6px', background: C.greenLight, color: C.green, borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.03em' }}>COOK</span>
+                                )}
+                              </div>
+                              <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 1 }}>
+                                {timeAgo(p.created_at)} · {expiresIn(p.expires_at)}
+                              </div>
+                            </div>
+                            {canModerate && (
+                              <button
+                                onClick={() => deletePostAction(p.id)}
+                                aria-label="Delete post"
+                                style={{ padding: 6, color: C.muted }}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Body */}
+                          <div style={{ padding: '0 14px 12px', font: `400 14px/1.4 ${font.sans}`, color: C.ink, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {p.body}
+                          </div>
+
+                          {/* Photo */}
+                          {p.photo_url && (
+                            <img src={p.photo_url} alt="" style={{ width: '100%', display: 'block', maxHeight: 500, objectFit: 'cover' }} />
+                          )}
+
+                          {/* Reactions + comments row */}
+                          <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <ReactionBtn kind="heart" count={p.heart_count} label="Heart" emoji="❤️" />
+                            <ReactionBtn kind="fire" count={p.fire_count} label="Fire" emoji="🔥" />
+                            <ReactionBtn kind="hands" count={p.hands_count} label="Hands up" emoji="🙌" />
+                            <div style={{ flex: 1 }} />
+                            <button
+                              onClick={() => toggleComments(p.id)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', background: C.surface, color: C.inkSoft, borderRadius: 20, font: `500 12px ${font.sans}`, border: `1px solid ${C.divider}` }}
+                            >
+                              <MessageCircle size={13} /> {p.comment_count > 0 ? p.comment_count : ''}
+                            </button>
+                          </div>
+
+                          {/* Comments (expanded) */}
+                          {isExpanded && (
+                            <div style={{ background: C.surface, padding: '10px 14px', borderTop: `1px solid ${C.hairline}` }}>
+                              {comments.length > 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                                  {comments.map(c => (
+                                    <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                                      {c.author_photo_url ? (
+                                        <span style={{ width: 26, height: 26, borderRadius: '50%', backgroundImage: `url(${c.author_photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                                      ) : (
+                                        <span style={{ width: 26, height: 26, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}`, flex: 'none' }}>{c.author_avatar}</span>
+                                      )}
+                                      <div style={{ flex: 1, background: C.card, borderRadius: 10, padding: '6px 10px', minWidth: 0 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between' }}>
+                                          <span style={{ font: `500 11.5px ${font.sans}`, color: C.ink }}>{c.author_name}</span>
+                                          {(c.user_id === user.id || user.role === 'admin') && (
+                                            <button
+                                              onClick={() => deleteCommentAction(p.id, c.id)}
+                                              style={{ color: C.muted, padding: 0, font: `400 10px ${font.sans}` }}
+                                            >
+                                              delete
+                                            </button>
+                                          )}
+                                        </div>
+                                        <div style={{ font: `400 12.5px/1.35 ${font.sans}`, color: C.inkSoft, marginTop: 2, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{c.body}</div>
+                                        <div style={{ font: `400 10px ${font.sans}`, color: C.muted, marginTop: 2 }}>{timeAgo(c.created_at)}</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>
+                                  No comments yet. Say something nice.
+                                </div>
+                              )}
+                              {/* Comment composer */}
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                <input
+                                  type="text"
+                                  value={commentDraft[p.id] || ''}
+                                  onChange={(e) => setCommentDraft(prev => ({ ...prev, [p.id]: e.target.value }))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                      e.preventDefault();
+                                      publishComment(p.id);
+                                    }
+                                  }}
+                                  placeholder="Add a comment…"
+                                  maxLength={300}
+                                  disabled={commentPosting === p.id}
+                                  style={{ flex: 1, padding: '8px 12px', border: `1px solid ${C.divider}`, borderRadius: 18, font: `400 12.5px ${font.sans}`, background: C.card, outline: 'none' }}
+                                />
+                                <button
+                                  onClick={() => publishComment(p.id)}
+                                  disabled={!(commentDraft[p.id] || '').trim() || commentPosting === p.id}
+                                  style={{ width: 34, height: 34, borderRadius: 17, background: (commentDraft[p.id] || '').trim() ? C.terracotta : C.cardAlt, color: (commentDraft[p.id] || '').trim() ? '#fff' : C.mutedLight, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}
+                                >
+                                  <Send size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -3373,6 +4091,132 @@ export default function Home() {
                   No dishes found.
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= FILTER PANEL ================= */}
+        {showFilterPanel && (
+          <div
+            onClick={() => setShowFilterPanel(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(30,15,5,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1400, animation: 'plfade .25s ease' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ background: C.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 22px 24px', width: '100%', maxWidth: 430, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -8px 30px rgba(0,0,0,.2)' }}
+            >
+              <div style={{ width: 44, height: 4, background: C.divider, borderRadius: 2, margin: '0 auto 14px' }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+                <div style={{ font: `500 20px ${font.serif}`, color: C.ink }}>Filters</div>
+                {activeFilterCount > 0 && (
+                  <button onClick={clearFilters} style={{ padding: '6px 12px', background: 'transparent', color: C.terracotta, font: `500 12.5px ${font.sans}` }}>
+                    Clear all
+                  </button>
+                )}
+              </div>
+
+              {/* Distance */}
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Distance</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {([
+                    { key: 'any', label: 'Any' },
+                    { key: '1mi', label: 'Within 1 mi' },
+                    { key: '3mi', label: 'Within 3 mi' },
+                    { key: '5mi', label: 'Within 5 mi' },
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setDistanceFilter(opt.key)}
+                      style={{
+                        padding: '8px 14px',
+                        background: distanceFilter === opt.key ? C.ink : C.surface,
+                        color: distanceFilter === opt.key ? '#fff' : C.inkSoft,
+                        border: `1px solid ${distanceFilter === opt.key ? C.ink : C.divider}`,
+                        borderRadius: 16,
+                        font: `500 12px ${font.sans}`,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                {distanceFilter !== 'any' && (user.latitude == null || user.longitude == null) && (
+                  <div style={{ marginTop: 8, font: `400 11px ${font.sans}`, color: '#8a2a2a' }}>
+                    Location not set — distance filter won&apos;t match any dishes. Enable location on your profile.
+                  </div>
+                )}
+              </div>
+
+              {/* Rating */}
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Rating</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {([
+                    { key: 'any', label: 'Any' },
+                    { key: '4plus', label: '4+ stars' },
+                    { key: '4half', label: '4.5+ stars' },
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setRatingFilter(opt.key)}
+                      style={{
+                        padding: '8px 14px',
+                        background: ratingFilter === opt.key ? C.ink : C.surface,
+                        color: ratingFilter === opt.key ? '#fff' : C.inkSoft,
+                        border: `1px solid ${ratingFilter === opt.key ? C.ink : C.divider}`,
+                        borderRadius: 16,
+                        font: `500 12px ${font.sans}`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      {opt.key !== 'any' && <Star size={11} fill={ratingFilter === opt.key ? '#fff' : C.gold} color={ratingFilter === opt.key ? '#fff' : C.gold} />}
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dietary tags */}
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Kitchen tags</div>
+                {availableDietaryTags.length === 0 ? (
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted }}>
+                    No cooks have set dietary tags yet.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {availableDietaryTags.map(tag => {
+                      const selected = dietaryFilter.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          onClick={() => toggleDietaryTag(tag)}
+                          style={{
+                            padding: '8px 14px',
+                            background: selected ? C.ink : C.surface,
+                            color: selected ? '#fff' : C.inkSoft,
+                            border: `1px solid ${selected ? C.ink : C.divider}`,
+                            borderRadius: 16,
+                            font: `500 12px ${font.sans}`,
+                          }}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => setShowFilterPanel(false)}
+                style={{ width: '100%', padding: 14, background: C.terracotta, color: '#fff', borderRadius: 14, font: `500 14px ${font.sans}`, marginTop: 8 }}
+              >
+                Show {filteredDishes.length} {filteredDishes.length === 1 ? 'result' : 'results'}
+              </button>
             </div>
           </div>
         )}

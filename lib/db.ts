@@ -125,6 +125,42 @@ export async function initializeDatabase() {
     await sql`CREATE INDEX IF NOT EXISTS idx_reviews_dish ON dish_reviews(dish_id, created_at DESC)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON dish_reviews(buyer_id)`;
 
+    // Community feed: ephemeral posts (24hr TTL)
+    await sql`
+      CREATE TABLE IF NOT EXISTS posts (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        photo_url TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours')
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_posts_expires ON posts(expires_at)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at DESC)`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS post_comments (
+        id SERIAL PRIMARY KEY,
+        post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments(post_id, created_at)`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS post_reactions (
+        post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('heart', 'fire', 'hands')),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (post_id, user_id, kind)
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions(post_id)`;
+
     await sql`CREATE INDEX IF NOT EXISTS idx_dishes_seller_id ON dishes(seller_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_dish_id ON orders(dish_id)`;
@@ -777,4 +813,123 @@ export async function getUnreviewedOrdersForBuyer(buyerId: number) {
     LIMIT 5
   `;
   return result.rows;
+}
+
+// ============= COMMUNITY FEED (24hr posts) =============
+
+// Opportunistic cleanup — deletes expired posts (their comments + reactions cascade).
+// Called by getFeed on read, so no cron needed. Cheap due to expires_at index.
+export async function pruneExpiredPosts() {
+  await sql`DELETE FROM posts WHERE expires_at < CURRENT_TIMESTAMP`;
+}
+
+export async function createPost(userId: number, body: string, photoUrl: string | null) {
+  const trimmed = String(body || '').trim();
+  if (!trimmed) throw new Error('Post text is required');
+  if (trimmed.length > 500) throw new Error('Post text is too long (max 500 chars)');
+  const result = await sql`
+    INSERT INTO posts (user_id, body, photo_url)
+    VALUES (${userId}, ${trimmed}, ${photoUrl})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getFeed(viewerId: number | null) {
+  // Cleanup on read — cheap because of the index on expires_at
+  await pruneExpiredPosts();
+
+  // Return posts + author info + reaction counts + viewer's own reactions + comment count.
+  // If viewerId is null (anonymous), viewer_reactions will be empty.
+  const vId = viewerId ?? 0;
+  const result = await sql`
+    SELECT
+      p.id, p.body, p.photo_url, p.created_at, p.expires_at, p.user_id,
+      u.name as author_name, u.avatar as author_avatar, u.photo_url as author_photo_url,
+      u.seller_status as author_seller_status,
+      u.kitchen_name as author_kitchen_name,
+      COALESCE(rc.heart_count, 0)::int as heart_count,
+      COALESCE(rc.fire_count, 0)::int as fire_count,
+      COALESCE(rc.hands_count, 0)::int as hands_count,
+      COALESCE(cc.comment_count, 0)::int as comment_count,
+      COALESCE(vr.viewer_reactions, '{}')::text[] as viewer_reactions
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    LEFT JOIN (
+      SELECT post_id,
+        COUNT(*) FILTER (WHERE kind = 'heart') as heart_count,
+        COUNT(*) FILTER (WHERE kind = 'fire') as fire_count,
+        COUNT(*) FILTER (WHERE kind = 'hands') as hands_count
+      FROM post_reactions GROUP BY post_id
+    ) rc ON rc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, COUNT(*)::int as comment_count
+      FROM post_comments GROUP BY post_id
+    ) cc ON cc.post_id = p.id
+    LEFT JOIN (
+      SELECT post_id, ARRAY_AGG(kind) as viewer_reactions
+      FROM post_reactions WHERE user_id = ${vId}
+      GROUP BY post_id
+    ) vr ON vr.post_id = p.id
+    WHERE p.expires_at > CURRENT_TIMESTAMP
+    ORDER BY p.created_at DESC
+    LIMIT 100
+  `;
+  return result.rows;
+}
+
+export async function getPost(postId: number) {
+  const result = await sql`SELECT * FROM posts WHERE id = ${postId} LIMIT 1`;
+  return result.rows[0] || null;
+}
+
+export async function deletePost(postId: number) {
+  await sql`DELETE FROM posts WHERE id = ${postId}`;
+  return { success: true };
+}
+
+export async function togglePostReaction(postId: number, userId: number, kind: 'heart' | 'fire' | 'hands') {
+  // Toggle: if the user already reacted with this kind, remove it; else add it
+  const existing = await sql`
+    SELECT 1 FROM post_reactions WHERE post_id = ${postId} AND user_id = ${userId} AND kind = ${kind} LIMIT 1
+  `;
+  if (existing.rows[0]) {
+    await sql`DELETE FROM post_reactions WHERE post_id = ${postId} AND user_id = ${userId} AND kind = ${kind}`;
+    return { active: false };
+  }
+  await sql`INSERT INTO post_reactions (post_id, user_id, kind) VALUES (${postId}, ${userId}, ${kind}) ON CONFLICT DO NOTHING`;
+  return { active: true };
+}
+
+export async function getCommentsForPost(postId: number) {
+  const result = await sql`
+    SELECT c.*, u.name as author_name, u.avatar as author_avatar, u.photo_url as author_photo_url
+    FROM post_comments c
+    JOIN users u ON c.user_id = u.id
+    WHERE c.post_id = ${postId}
+    ORDER BY c.created_at ASC
+  `;
+  return result.rows;
+}
+
+export async function createComment(postId: number, userId: number, body: string) {
+  const trimmed = String(body || '').trim();
+  if (!trimmed) throw new Error('Comment cannot be empty');
+  if (trimmed.length > 300) throw new Error('Comment too long (max 300 chars)');
+  const result = await sql`
+    INSERT INTO post_comments (post_id, user_id, body)
+    VALUES (${postId}, ${userId}, ${trimmed})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function deleteComment(commentId: number) {
+  await sql`DELETE FROM post_comments WHERE id = ${commentId}`;
+  return { success: true };
+}
+
+export async function getCommentAuthor(commentId: number): Promise<number | null> {
+  const result = await sql`SELECT user_id FROM post_comments WHERE id = ${commentId} LIMIT 1`;
+  return result.rows[0]?.user_id ?? null;
 }
