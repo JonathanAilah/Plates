@@ -157,6 +157,8 @@ export default function Home() {
   const [pickupTiming, setPickupTiming] = useState<'asap' | 'schedule'>('asap');
   const [toast, setToast] = useState<string | null>(null);
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
+  const [showingDirections, setShowingDirections] = useState(false);
+  const [tripInfo, setTripInfo] = useState<{ distanceText: string; durationText: string } | null>(null);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -273,6 +275,8 @@ export default function Home() {
   const openMeal = (dish: Dish) => {
     setSelectedDish(dish);
     setMealQty(1);
+    setShowingDirections(false);
+    setTripInfo(null);
     setScreen('meal');
   };
 
@@ -653,6 +657,8 @@ export default function Home() {
                       id: d.id,
                       lat: d.seller_latitude!,
                       lng: d.seller_longitude!,
+                      photoUrl: d.photo_url,
+                      emoji: d.emoji,
                       label: `$${Number(d.price).toFixed(0)}`,
                       onClick: () => openMeal(d),
                     }))}
@@ -774,7 +780,7 @@ export default function Home() {
                 <div style={{ marginTop: 18 }}>
                   <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 10 }}>Pickup location</div>
                   <MapView
-                    height={180}
+                    height={220}
                     radius={14}
                     centerLat={selectedDish.seller_latitude}
                     centerLng={selectedDish.seller_longitude}
@@ -784,20 +790,40 @@ export default function Home() {
                       id: selectedDish.id,
                       lat: selectedDish.seller_latitude,
                       lng: selectedDish.seller_longitude,
+                      photoUrl: selectedDish.photo_url,
+                      emoji: selectedDish.emoji,
                     }]}
-                    zoom={14}
-                    interactive={false}
+                    zoom={showingDirections ? 12 : 14}
+                    interactive={showingDirections}
+                    showDirections={showingDirections}
+                    onDirectionsReady={setTripInfo}
                   />
-                  <button
-                    onClick={() => {
-                      const dest = `${selectedDish.seller_latitude},${selectedDish.seller_longitude}`;
-                      const url = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
-                      window.open(url, '_blank');
-                    }}
-                    style={{ marginTop: 10, width: '100%', background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 12, padding: 12, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                  >
-                    <Navigation size={15} /> Get directions
-                  </button>
+                  {showingDirections && tripInfo && (
+                    <div style={{ marginTop: 10, background: C.greenLight, borderRadius: 12, padding: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Navigation size={16} color={C.green} />
+                      <div style={{ flex: 1, font: `500 13px ${font.sans}`, color: C.green }}>
+                        {tripInfo.durationText} · {tripInfo.distanceText} by car
+                      </div>
+                    </div>
+                  )}
+                  {user.latitude == null || user.longitude == null ? (
+                    <button
+                      onClick={requestLocation}
+                      style={{ marginTop: 10, width: '100%', background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 12, padding: 12, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    >
+                      <MapPin size={15} /> Share your location to see directions
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setShowingDirections(!showingDirections);
+                        if (showingDirections) setTripInfo(null);
+                      }}
+                      style={{ marginTop: 10, width: '100%', background: showingDirections ? C.terracottaLight : C.card, border: `1px solid ${showingDirections ? C.terracotta : C.divider}`, color: showingDirections ? C.terracotta : C.ink, borderRadius: 12, padding: 12, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    >
+                      <Navigation size={15} /> {showingDirections ? 'Hide directions' : 'Show directions'}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

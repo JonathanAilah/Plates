@@ -1,36 +1,32 @@
-# Plates — Maps Update
+# Plates — Maps v2 update
 
-This zip contains all files needed to add Google Maps to your Plates app.
+## What changed
 
-## What's included
+**In-app directions.** The "Show directions" button now draws the route from your location to the seller directly on the pickup map, and shows the driving distance + duration in a green banner. No more opening a new browser tab.
 
-Five files, matching the folder structure of your GitHub repo:
+**Photo pins on the Discover map.** Each cook pin now shows a circular photo of the dish (with a terracotta ring and price badge). Dishes without a photo fall back to their emoji on the striped placeholder pattern.
 
-- `components/MapView.tsx` **NEW** — reusable Google Map component
-- `components/AddressAutocomplete.tsx` **NEW** — address search-as-you-type input
-- `lib/db.ts` **REPLACE** — adds `prep_address` column + `updateUserAddress` function
-- `app/api/users/route.ts` **REPLACE** — adds `updateAddress` action
-- `app/page.tsx` **REPLACE** — wires up map view toggle, pickup map, and address autocomplete
+## Files
+
+Only 2 files change:
+
+- `components/MapView.tsx` **REPLACE** — new photo-pin rendering + directions overlay
+- `app/page.tsx` **REPLACE** — new directions toggle, hooks up trip info banner
 
 ## How to install
 
 1. Extract this zip.
-2. Open your local `Plates` repo folder (where GitHub Desktop is pointing).
-3. Copy each file into the matching path in your repo:
-   - `components/` folder is NEW — you'll be creating it at the top level of the repo
-   - `lib/db.ts` **overwrites** your existing file
-   - `app/api/users/route.ts` **overwrites** your existing file
-   - `app/page.tsx` **overwrites** your existing file
-4. Open GitHub Desktop — you should see 5 changed files
-5. Commit with message: `Add Google Maps: discover map view, pickup map, address autocomplete`
-6. Push origin
+2. Copy each file into your local `Plates` repo at the matching path (both are replacements — no new folders).
+3. GitHub Desktop should show 2 changed files.
+4. Commit: `In-app directions + dish photo pins on map`
+5. Push origin — Vercel auto-deploys.
 
-Vercel will auto-deploy. When it's live:
+## What to test after deploy
 
-- **Discover feed** now has a List/Map toggle at the top of "Fresh from the block". Tap Map to see cook pins with prices.
-- **Meal detail** now shows a small pickup map with a "Get directions" button that opens Google Maps.
-- **Seller kitchen** now has an address autocomplete — type your address and pick from Google's suggestions. This saves both the address text AND the precise lat/lng, so pickup distance is accurate even if buyers didn't grant browser location permission.
+- **Discover → Map tab**: pins now show the dish photo (or emoji) in a circular frame with the price beneath. Tap a pin → opens the meal.
+- **Meal detail → Show directions**: the route draws on the map in terracotta, and a green banner appears showing "X min · Y mi by car". Tap again to hide.
 
-## Prerequisite
+## Notes
 
-Your `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` environment variable must be set in Vercel with the Maps JavaScript API, Places API, and Geocoding API all enabled. You already did this.
+- Photo pins convert your dish photos to canvas data URIs so they can be embedded in the map marker. If a photo fails to load, the pin falls back to the emoji automatically.
+- Directions currently show DRIVING mode. If you want walking/biking added as options, tell me.
