@@ -220,7 +220,7 @@ interface Notification {
 interface User {
   id: number;
   name: string;
-  isSeller: boolean;
+  is_seller: boolean;
   avatar: string;
   bio: string;
   photo_url: string | null;
@@ -245,6 +245,9 @@ interface User {
   rejection_reason: string | null;
   suspended_reason: string | null;
   account_disabled: boolean;
+  stripe_account_id: string | null;
+  stripe_charges_enabled: boolean;
+  stripe_payouts_enabled: boolean;
 }
 
 function distanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -340,6 +343,7 @@ export default function Home() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [tipAmount, setTipAmount] = useState(3);
   const [tipEditing, setTipEditing] = useState(false);
+  const [connectingStripe, setConnectingStripe] = useState(false);
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
   const [toast, setToast] = useState<string | null>(null);
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
@@ -1542,22 +1546,45 @@ export default function Home() {
 
   const toggleSellerMode = async () => {
     if (!user) return;
-    // If already approved and toggling OFF, go through the plain toggle path
-    if (user.seller_status === 'approved' && user.isSeller) {
+    // Already approved: toggle is_seller on/off directly. Approval is never lost,
+    // so we never send an approved cook back through the profile form or re-review.
+    if (user.seller_status === 'approved') {
       try {
         const res = await fetch('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'toggleSeller', isSeller: false }),
+          body: JSON.stringify({ action: 'toggleSeller', isSeller: !user.is_seller }),
         });
         const updatedUser = await res.json();
         setUser(updatedUser);
       } catch (error) { console.error(error); }
       return;
     }
-    // Otherwise, entering seller mode = fill out profile then submit for review
+    // Not yet a seller: go fill out the profile and submit for review.
     setScreen('cook-profile');
   };
+
+  const connectStripePayments = async () => {
+      if (!user) return;
+      setConnectingStripe(true);
+      try {
+        const res = await fetch('/api/stripe/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          console.error('No onboarding URL returned', data);
+          setConnectingStripe(false);
+        }
+      } catch (error) {
+        console.error(error);
+        setConnectingStripe(false);
+      }
+    };
 
   const handleProfilePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2337,7 +2364,7 @@ export default function Home() {
                   <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Are you a home cook?</div>
                   <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
                 </div>
-                <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>{user.isSeller ? 'Kitchen' : 'Start cooking'}</div>
+                <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>{user.is_seller ? 'Kitchen' : 'Start cooking'}</div>
               </div>
             </div>
 
@@ -3092,13 +3119,13 @@ export default function Home() {
             </div>
 
             <div style={{ background: C.card, padding: 14, borderRadius: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: user.isSeller ? 12 : 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: user.is_seller ? 12 : 0 }}>
                 <span style={{ font: `400 14px ${font.sans}`, color: C.inkSoft }}>Seller mode</span>
-                <button onClick={toggleSellerMode} style={{ width: 48, height: 28, borderRadius: 14, background: user.isSeller ? C.green : C.divider, position: 'relative', transition: 'all .3s' }}>
-                  <div style={{ position: 'absolute', width: 24, height: 24, background: '#fff', borderRadius: '50%', top: 2, left: user.isSeller ? 22 : 2, transition: 'left .3s' }} />
+                <button onClick={toggleSellerMode} style={{ width: 48, height: 28, borderRadius: 14, background: user.is_seller ? C.green : C.divider, position: 'relative', transition: 'all .3s' }}>
+                  <div style={{ position: 'absolute', width: 24, height: 24, background: '#fff', borderRadius: '50%', top: 2, left: user.is_seller ? 22 : 2, transition: 'left .3s' }} />
                 </button>
               </div>
-              {user.isSeller && (
+              {user.is_seller && (
                 <button onClick={() => setScreen('seller-dashboard')} style={{ width: '100%', padding: 10, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}` }}>
                   Go to kitchen
                 </button>
@@ -3283,7 +3310,21 @@ export default function Home() {
               )}
             </div>
 
-            {user.seller_status === 'approved' ? (
+            {user.seller_status === 'approved' && user.is_seller && !user.stripe_charges_enabled ? (
+              <div style={{ background: C.card, border: `1px solid ${C.cardAlt}`, borderRadius: 14, padding: 16, marginBottom: 16, textAlign: 'center' }}>
+                <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 6 }}>One more step</div>
+                <div style={{ font: `400 12.5px ${font.sans}`, color: C.muted, marginBottom: 12 }}>
+                  Connect your payment details so you can get paid for orders. We use Stripe to handle payouts securely — you&apos;ll add your bank info on their site.
+                </div>
+                <button
+                  onClick={connectStripePayments}
+                  disabled={connectingStripe}
+                  style={{ width: '100%', padding: 12, background: C.green, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, border: 'none', cursor: connectingStripe ? 'default' : 'pointer', opacity: connectingStripe ? 0.6 : 1 }}
+                >
+                  {connectingStripe ? 'Connecting…' : 'Connect payments'}
+                </button>
+              </div>
+            ) : user.seller_status === 'approved' && user.is_seller ? (
               <div style={{ marginBottom: 16 }}>
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>What are you cooking today?</div>
                 <input type="text" id="dishName" placeholder="e.g., Homemade Pasta" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
@@ -3750,7 +3791,13 @@ export default function Home() {
         })()}
 
         {/* ================= KITCHEN QUEUE (cook) ================= */}
-        {screen === 'kitchen-queue' && (
+        {screen === 'kitchen-queue' && user && !user.is_seller ? (
+  <div style={{ animation: 'plfade .3s ease', paddingBottom: 100, padding: '60px 22px', textAlign: 'center' }}>
+    <div style={{ font: `500 20px ${font.serif}`, color: C.ink, marginBottom: 8 }}>Seller mode is off</div>
+    <div style={{ font: `400 13.5px ${font.sans}`, color: C.muted, marginBottom: 20 }}>Turn on seller mode to access your kitchen and manage orders.</div>
+    <button onClick={toggleSellerMode} style={{ padding: '12px 20px', background: C.green, color: '#fff', border: 'none', borderRadius: 10, font: `500 14px ${font.sans}`, cursor: 'pointer' }}>Turn on seller mode</button>
+  </div>
+) : screen === 'kitchen-queue' && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
             <div style={{ padding: '20px 22px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={() => setScreen('seller-dashboard')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
@@ -3893,7 +3940,7 @@ export default function Home() {
               <div style={{ padding: '18px 22px 12px', display: 'flex', alignItems: 'center', gap: 12, borderBottom: `1px solid ${C.hairline}`, background: C.card }}>
                 <button onClick={() => {
                   // Return to whichever screen makes sense
-                  if (user.isSeller && cookOrders.find(c => c.id === chatOrder.id)) setScreen('kitchen-queue');
+                  if (user.is_seller && cookOrders.find(c => c.id === chatOrder.id)) setScreen('kitchen-queue');
                   else setScreen('order-detail');
                 }} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
                   <ArrowLeft size={18} />

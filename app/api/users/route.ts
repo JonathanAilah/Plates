@@ -43,12 +43,18 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'toggleSeller') {
-      // Turning seller mode ON no longer immediately makes you a seller.
-      // Only turn it OFF here — turning ON goes through submitForReview.
+      // Turning OFF is always allowed.
       if (body.isSeller === false) {
         const user = await updateUserSeller(me.id, false);
         return NextResponse.json(user);
       }
+      // Turning ON: only allowed if they're already an approved seller
+      // (approval is never lost, so no need to re-submit for review).
+      if (me.seller_status === 'approved') {
+        const user = await updateUserSeller(me.id, true);
+        return NextResponse.json(user);
+      }
+      // Never approved: must go through the review flow, not a direct toggle.
       return NextResponse.json({ error: 'Use submitForReview to become a seller' }, { status: 400 });
     }
 

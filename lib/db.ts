@@ -45,6 +45,15 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS rejection_reason TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS account_disabled BOOLEAN DEFAULT false`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT`;
+    // Stripe Connect (cooks)
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_account_id TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_charges_enabled BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_payouts_enabled BOOLEAN DEFAULT false`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_users_stripe_account ON users(stripe_account_id)`;
+
+    // Stripe payments (orders)
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_orders_payment_intent ON orders(stripe_payment_intent_id)`;
     // Backfill: any user who is currently is_seller=true should be treated as approved
     await sql`UPDATE users SET seller_status = 'approved' WHERE is_seller = true AND seller_status = 'not_seller'`;
 
@@ -478,6 +487,7 @@ export async function getSellerOrders(sellerId: number) {
 export async function getCart(buyerId: number) {
   const result = await sql`
     SELECT c.id as cart_item_id, c.quantity, d.*,
+           u.id as seller_id,
            u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
            u.pickup_min_minutes as seller_pickup_min_minutes,
@@ -1265,4 +1275,57 @@ export async function acceptTerms(userId: number, version: string) {
     RETURNING *
   `;
   return result.rows[0];
+}
+
+// ============= STRIPE CONNECT =============
+
+export async function setStripeAccountId(userId: number, stripeAccountId: string) {
+  const result = await sql`
+    UPDATE users SET stripe_account_id = ${stripeAccountId} WHERE id = ${userId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function updateStripeAccountStatus(
+  stripeAccountId: string,
+  chargesEnabled: boolean,
+  payoutsEnabled: boolean,
+) {
+  const result = await sql`
+    UPDATE users
+    SET stripe_charges_enabled = ${chargesEnabled}, stripe_payouts_enabled = ${payoutsEnabled}
+    WHERE stripe_account_id = ${stripeAccountId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getUserByStripeAccountId(stripeAccountId: string) {
+  const result = await sql`SELECT * FROM users WHERE stripe_account_id = ${stripeAccountId} LIMIT 1`;
+  return result.rows[0] || null;
+}
+
+export async function getCartGroupedBySeller(buyerId: number) {
+  const items = await getCart(buyerId);
+  const bySeller = new Map<number, typeof items>();
+  for (const item of items) {
+    const sellerId = item.seller_id;
+    if (!bySeller.has(sellerId)) bySeller.set(sellerId, []);
+    bySeller.get(sellerId)!.push(item);
+  }
+  return bySeller;
+}
+
+export async function setOrderPaymentIntent(orderId: string, paymentIntentId: string) {
+  const result = await sql`
+    UPDATE orders SET stripe_payment_intent_id = ${paymentIntentId} WHERE id = ${orderId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getOrderByPaymentIntent(paymentIntentId: string) {
+  const result = await sql`
+    SELECT * FROM orders WHERE stripe_payment_intent_id = ${paymentIntentId} LIMIT 1
+  `;
+  return result.rows[0] || null;
 }

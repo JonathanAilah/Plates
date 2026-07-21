@@ -55,8 +55,8 @@ export async function POST(request: NextRequest) {
 
     if (action === 'create') {
       // Only approved sellers can post dishes
-      if (me.seller_status !== 'approved') {
-        return NextResponse.json({ error: 'Only approved sellers can post dishes' }, { status: 403 });
+      if (me.seller_status !== 'approved' || !me.is_seller) {
+        return NextResponse.json({ error: 'Seller mode must be on to post dishes' }, { status: 403 });
       }
       if (me.account_disabled) {
         return NextResponse.json({ error: 'Account is disabled' }, { status: 403 });
