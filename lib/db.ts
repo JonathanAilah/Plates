@@ -59,6 +59,19 @@ export async function initializeDatabase() {
       )
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS cart_items (
+        id SERIAL PRIMARY KEY,
+        buyer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        dish_id INTEGER NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
+        quantity INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (buyer_id, dish_id)
+      )
+    `;
+
+    await sql`CREATE INDEX IF NOT EXISTS idx_cart_buyer ON cart_items(buyer_id)`;
+
     await sql`CREATE INDEX IF NOT EXISTS idx_dishes_seller_id ON dishes(seller_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_dish_id ON orders(dish_id)`;
@@ -217,4 +230,69 @@ export async function getSellerOrders(sellerId: number) {
     ORDER BY o.created_at DESC
   `;
   return result.rows;
+}
+
+export async function getCart(buyerId: number) {
+  const result = await sql`
+    SELECT c.id as cart_item_id, c.quantity, d.*,
+           u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
+           u.latitude as seller_latitude, u.longitude as seller_longitude
+    FROM cart_items c
+    JOIN dishes d ON c.dish_id = d.id
+    JOIN users u ON d.seller_id = u.id
+    WHERE c.buyer_id = ${buyerId}
+    ORDER BY c.created_at ASC
+  `;
+  return result.rows;
+}
+
+export async function addToCart(buyerId: number, dishId: number, quantity: number) {
+  const result = await sql`
+    INSERT INTO cart_items (buyer_id, dish_id, quantity)
+    VALUES (${buyerId}, ${dishId}, ${quantity})
+    ON CONFLICT (buyer_id, dish_id)
+    DO UPDATE SET quantity = cart_items.quantity + ${quantity}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function updateCartItem(cartItemId: number, quantity: number) {
+  if (quantity <= 0) {
+    await sql`DELETE FROM cart_items WHERE id = ${cartItemId}`;
+    return { deleted: true };
+  }
+  const result = await sql`
+    UPDATE cart_items SET quantity = ${quantity} WHERE id = ${cartItemId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function removeCartItem(cartItemId: number) {
+  await sql`DELETE FROM cart_items WHERE id = ${cartItemId}`;
+  return { success: true };
+}
+
+export async function clearCart(buyerId: number) {
+  await sql`DELETE FROM cart_items WHERE buyer_id = ${buyerId}`;
+  return { success: true };
+}
+
+export async function checkoutCart(buyerId: number, tipAmount: number, serviceFee: number) {
+  const items = await getCart(buyerId);
+  if (items.length === 0) return { orders: [], total: 0 };
+  const orders = [];
+  let total = 0;
+  for (const item of items) {
+    const linePrice = Number(item.price) * item.quantity;
+    total += linePrice;
+    const order = await sql`
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice})
+      RETURNING *
+    `;
+    orders.push(order.rows[0]);
+  }
+  await clearCart(buyerId);
+  return { orders, total: total + tipAmount + serviceFee, subtotal: total, tip: tipAmount, fee: serviceFee };
 }

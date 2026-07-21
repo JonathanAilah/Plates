@@ -1,0 +1,59 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getCart, addToCart, updateCartItem, removeCartItem, clearCart, checkoutCart } from '@/lib/db';
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const buyerId = searchParams.get('buyerId');
+    if (!buyerId) {
+      return NextResponse.json({ error: 'buyerId required' }, { status: 400 });
+    }
+    const items = await getCart(parseInt(buyerId));
+    return NextResponse.json(items);
+  } catch (error) {
+    console.error('Cart GET error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { action } = body;
+
+    if (action === 'add') {
+      const { buyerId, dishId, quantity } = body;
+      const item = await addToCart(buyerId, dishId, quantity || 1);
+      return NextResponse.json(item);
+    }
+
+    if (action === 'update') {
+      const { cartItemId, quantity } = body;
+      const result = await updateCartItem(cartItemId, quantity);
+      return NextResponse.json(result);
+    }
+
+    if (action === 'remove') {
+      const { cartItemId } = body;
+      const result = await removeCartItem(cartItemId);
+      return NextResponse.json(result);
+    }
+
+    if (action === 'clear') {
+      const { buyerId } = body;
+      const result = await clearCart(buyerId);
+      return NextResponse.json(result);
+    }
+
+    if (action === 'checkout') {
+      const { buyerId, tipAmount, serviceFee } = body;
+      const result = await checkoutCart(buyerId, tipAmount || 0, serviceFee || 0);
+      return NextResponse.json(result);
+    }
+
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+  } catch (error) {
+    console.error('Cart POST error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
