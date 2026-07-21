@@ -1575,6 +1575,56 @@ export default function Home() {
     }
   };
 
+  // ===== MEMOS BEFORE EARLY RETURNS =====
+  // React requires the same hooks in the same order on every render.
+  // These must be declared BEFORE any `if (loading) return` or `if (!user) return`.
+  // Guarded against null user.
+
+  const availableDietaryTags = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const d of dishes) {
+      if (d.seller_kitchen_flags) {
+        d.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).forEach(f => set.add(f));
+      }
+    }
+    return Array.from(set).sort();
+  }, [dishes]);
+
+  const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length;
+
+  const filteredDishes = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return dishes.filter(d => {
+      if (q) {
+        const nameMatch = d.name.toLowerCase().includes(q);
+        const cookMatch = (d.seller_name || '').toLowerCase().includes(q);
+        if (!nameMatch && !cookMatch) return false;
+      }
+      if (distanceFilter !== 'any') {
+        // If user isn't loaded / has no location, distance filter can't match anything
+        if (!user || user.latitude == null || user.longitude == null || d.seller_latitude == null || d.seller_longitude == null) return false;
+        const dist = distanceMiles(user.latitude, user.longitude, d.seller_latitude, d.seller_longitude);
+        const maxMi = distanceFilter === '1mi' ? 1 : distanceFilter === '3mi' ? 3 : 5;
+        if (dist > maxMi) return false;
+      }
+      if (ratingFilter !== 'any') {
+        const avg = Number(d.avg_rating || 0);
+        const threshold = ratingFilter === '4plus' ? 4 : 4.5;
+        if (avg < threshold) return false;
+      }
+      if (dietaryFilter.length > 0) {
+        const dishTags = (d.seller_kitchen_flags || '').split(',').map(f => f.trim());
+        for (const tag of dietaryFilter) {
+          if (!dishTags.includes(tag)) return false;
+        }
+      }
+      return true;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dishes, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user?.latitude, user?.longitude]);
+
+  const isFiltering = searchQuery.trim().length > 0 || activeFilterCount > 0;
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.page, color: C.muted }}>
@@ -1791,60 +1841,8 @@ export default function Home() {
     );
   }
 
-  // Available dietary tags — derived from what any seed cook has, so we don't hardcode
-  const availableDietaryTags = React.useMemo(() => {
-    const set = new Set<string>();
-    for (const d of dishes) {
-      if (d.seller_kitchen_flags) {
-        d.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).forEach(f => set.add(f));
-      }
-    }
-    return Array.from(set).sort();
-  }, [dishes]);
-
-  // Applied filters count (for showing on the filter chip)
-  const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length;
-
-  // Filtered dish list
-  const filteredDishes = React.useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return dishes.filter(d => {
-      // Search: name OR cook name
-      if (q) {
-        const nameMatch = d.name.toLowerCase().includes(q);
-        const cookMatch = (d.seller_name || '').toLowerCase().includes(q);
-        if (!nameMatch && !cookMatch) return false;
-      }
-
-      // Distance
-      if (distanceFilter !== 'any') {
-        if (user.latitude == null || user.longitude == null || d.seller_latitude == null || d.seller_longitude == null) return false;
-        const dist = distanceMiles(user.latitude, user.longitude, d.seller_latitude, d.seller_longitude);
-        const maxMi = distanceFilter === '1mi' ? 1 : distanceFilter === '3mi' ? 3 : 5;
-        if (dist > maxMi) return false;
-      }
-
-      // Rating
-      if (ratingFilter !== 'any') {
-        const avg = Number(d.avg_rating || 0);
-        const threshold = ratingFilter === '4plus' ? 4 : 4.5;
-        if (avg < threshold) return false;
-      }
-
-      // Dietary — dish must have ALL selected tags
-      if (dietaryFilter.length > 0) {
-        const dishTags = (d.seller_kitchen_flags || '').split(',').map(f => f.trim());
-        for (const tag of dietaryFilter) {
-          if (!dishTags.includes(tag)) return false;
-        }
-      }
-
-      return true;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dishes, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user.latitude, user.longitude]);
-
-  const isFiltering = searchQuery.trim().length > 0 || activeFilterCount > 0;
+  // Available dietary tags and filtering — already computed above with hooks in the right order.
+  // Just derive display-only values here.
   const heroDish = isFiltering ? null : (dishes[0] || null);
   const otherDishes = isFiltering ? filteredDishes : dishes.slice(heroDish ? 1 : 0);
 
