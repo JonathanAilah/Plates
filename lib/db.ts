@@ -136,6 +136,9 @@ export async function initializeDatabase() {
         expires_at TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours')
       )
     `;
+    // Location snapshot columns (added later — safe re-run)
+    await sql`ALTER TABLE posts ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`;
+    await sql`ALTER TABLE posts ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`;
     await sql`CREATE INDEX IF NOT EXISTS idx_posts_expires ON posts(expires_at)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_posts_user ON posts(user_id, created_at DESC)`;
 
@@ -827,24 +830,97 @@ export async function createPost(userId: number, body: string, photoUrl: string 
   const trimmed = String(body || '').trim();
   if (!trimmed) throw new Error('Post text is required');
   if (trimmed.length > 500) throw new Error('Post text is too long (max 500 chars)');
+  // Snapshot poster's profile location at time of post — feed uses this for distance filtering
   const result = await sql`
-    INSERT INTO posts (user_id, body, photo_url)
-    VALUES (${userId}, ${trimmed}, ${photoUrl})
+    INSERT INTO posts (user_id, body, photo_url, latitude, longitude)
+    SELECT ${userId}, ${trimmed}, ${photoUrl}, u.latitude, u.longitude
+    FROM users u WHERE u.id = ${userId}
     RETURNING *
   `;
   return result.rows[0];
 }
 
-export async function getFeed(viewerId: number | null) {
+// Feed with optional proximity filter.
+// If viewerLat/viewerLng/radiusMi are all provided, only posts within radius are returned.
+// If any is null, all posts are returned (global fallback).
+// The `distance_mi` column is computed via Haversine formula in SQL.
+export async function getFeed(
+  viewerId: number | null,
+  viewerLat?: number | null,
+  viewerLng?: number | null,
+  radiusMi?: number | null,
+) {
   // Cleanup on read — cheap because of the index on expires_at
   await pruneExpiredPosts();
 
-  // Return posts + author info + reaction counts + viewer's own reactions + comment count.
-  // If viewerId is null (anonymous), viewer_reactions will be empty.
   const vId = viewerId ?? 0;
+
+  // If we have a viewer location AND a radius, apply the proximity filter.
+  // Otherwise return everything globally.
+  const useProximity = viewerLat != null && viewerLng != null && radiusMi != null && radiusMi > 0;
+
+  // Haversine formula returns distance in miles; 3959 = earth radius in miles.
+  // We compute it as a column when possible (viewer has location) so the frontend
+  // can display "0.8 mi away" chips.
+  if (useProximity) {
+    const result = await sql`
+      SELECT
+        p.id, p.body, p.photo_url, p.created_at, p.expires_at, p.user_id,
+        p.latitude as post_latitude, p.longitude as post_longitude,
+        u.name as author_name, u.avatar as author_avatar, u.photo_url as author_photo_url,
+        u.seller_status as author_seller_status,
+        u.kitchen_name as author_kitchen_name,
+        COALESCE(rc.heart_count, 0)::int as heart_count,
+        COALESCE(rc.fire_count, 0)::int as fire_count,
+        COALESCE(rc.hands_count, 0)::int as hands_count,
+        COALESCE(cc.comment_count, 0)::int as comment_count,
+        COALESCE(vr.viewer_reactions, '{}')::text[] as viewer_reactions,
+        CASE
+          WHEN p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+          THEN 3959 * 2 * ASIN(SQRT(
+                 POWER(SIN((RADIANS(${viewerLat}) - RADIANS(p.latitude)) / 2), 2) +
+                 COS(RADIANS(p.latitude)) * COS(RADIANS(${viewerLat})) *
+                 POWER(SIN((RADIANS(${viewerLng}) - RADIANS(p.longitude)) / 2), 2)
+               ))
+          ELSE NULL
+        END as distance_mi
+      FROM posts p
+      JOIN users u ON p.user_id = u.id
+      LEFT JOIN (
+        SELECT post_id,
+          COUNT(*) FILTER (WHERE kind = 'heart') as heart_count,
+          COUNT(*) FILTER (WHERE kind = 'fire') as fire_count,
+          COUNT(*) FILTER (WHERE kind = 'hands') as hands_count
+        FROM post_reactions GROUP BY post_id
+      ) rc ON rc.post_id = p.id
+      LEFT JOIN (
+        SELECT post_id, COUNT(*)::int as comment_count
+        FROM post_comments GROUP BY post_id
+      ) cc ON cc.post_id = p.id
+      LEFT JOIN (
+        SELECT post_id, ARRAY_AGG(kind) as viewer_reactions
+        FROM post_reactions WHERE user_id = ${vId}
+        GROUP BY post_id
+      ) vr ON vr.post_id = p.id
+      WHERE p.expires_at > CURRENT_TIMESTAMP
+        AND p.latitude IS NOT NULL
+        AND p.longitude IS NOT NULL
+        AND (3959 * 2 * ASIN(SQRT(
+              POWER(SIN((RADIANS(${viewerLat}) - RADIANS(p.latitude)) / 2), 2) +
+              COS(RADIANS(p.latitude)) * COS(RADIANS(${viewerLat})) *
+              POWER(SIN((RADIANS(${viewerLng}) - RADIANS(p.longitude)) / 2), 2)
+            ))) <= ${radiusMi}
+      ORDER BY p.created_at DESC
+      LIMIT 100
+    `;
+    return result.rows;
+  }
+
+  // Global fallback: no proximity filter. distance_mi is null.
   const result = await sql`
     SELECT
       p.id, p.body, p.photo_url, p.created_at, p.expires_at, p.user_id,
+      p.latitude as post_latitude, p.longitude as post_longitude,
       u.name as author_name, u.avatar as author_avatar, u.photo_url as author_photo_url,
       u.seller_status as author_seller_status,
       u.kitchen_name as author_kitchen_name,
@@ -852,7 +928,8 @@ export async function getFeed(viewerId: number | null) {
       COALESCE(rc.fire_count, 0)::int as fire_count,
       COALESCE(rc.hands_count, 0)::int as hands_count,
       COALESCE(cc.comment_count, 0)::int as comment_count,
-      COALESCE(vr.viewer_reactions, '{}')::text[] as viewer_reactions
+      COALESCE(vr.viewer_reactions, '{}')::text[] as viewer_reactions,
+      NULL::double precision as distance_mi
     FROM posts p
     JOIN users u ON p.user_id = u.id
     LEFT JOIN (

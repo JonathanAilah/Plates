@@ -68,7 +68,10 @@ interface Post {
   fire_count: number;
   hands_count: number;
   comment_count: number;
-  viewer_reactions: string[]; // ['heart', 'fire', 'hands'] the current viewer has toggled
+  viewer_reactions: string[];
+  post_latitude: number | null;
+  post_longitude: number | null;
+  distance_mi: number | null; // null if we couldn't compute (viewer or post has no location)
 }
 
 interface PostComment {
@@ -402,6 +405,13 @@ export default function Home() {
   const [commentDraft, setCommentDraft] = useState<Record<number, string>>({});
   const [commentPosting, setCommentPosting] = useState<number | null>(null);
 
+  // Feed proximity — viewer's CURRENT location (refreshed each session)
+  const [feedLat, setFeedLat] = useState<number | null>(null);
+  const [feedLng, setFeedLng] = useState<number | null>(null);
+  const [feedLocationStatus, setFeedLocationStatus] = useState<'unknown' | 'requesting' | 'granted' | 'denied'>('unknown');
+  const [feedRadiusMi, setFeedRadiusMi] = useState<number>(5); // default 5 miles
+  const [showRadiusPanel, setShowRadiusPanel] = useState(false);
+
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -725,10 +735,36 @@ export default function Home() {
 
   const loadFeed = async () => {
     try {
-      const res = await fetch('/api/posts?action=feed');
+      const params = new URLSearchParams({ action: 'feed' });
+      if (feedLat != null && feedLng != null) {
+        params.set('lat', String(feedLat));
+        params.set('lng', String(feedLng));
+        params.set('radiusMi', String(feedRadiusMi));
+      }
+      const res = await fetch(`/api/posts?${params.toString()}`);
       const data = await res.json();
       setPosts(Array.isArray(data) ? data : []);
     } catch (e) { console.error('Feed load error:', e); }
+  };
+
+  // Request current location when the Feed tab is opened (each session, until granted or denied)
+  const requestFeedLocation = () => {
+    if (!navigator.geolocation) {
+      setFeedLocationStatus('denied');
+      return;
+    }
+    setFeedLocationStatus('requesting');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setFeedLat(pos.coords.latitude);
+        setFeedLng(pos.coords.longitude);
+        setFeedLocationStatus('granted');
+      },
+      () => {
+        setFeedLocationStatus('denied');
+      },
+      { timeout: 8000, maximumAge: 60000 }
+    );
   };
 
   // Photo picker (reuses similar pattern as dish photo)
@@ -1067,6 +1103,10 @@ export default function Home() {
   // Load feed when switching to it (and poll while on it)
   useEffect(() => {
     if (screen !== 'feed' || homeTab !== 'feed') return;
+    // Request location once per session when the tab opens
+    if (feedLocationStatus === 'unknown') {
+      requestFeedLocation();
+    }
     loadFeed();
     const interval = setInterval(() => {
       if (document.hidden) return;
@@ -1074,7 +1114,7 @@ export default function Home() {
     }, 20000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, homeTab]);
+  }, [screen, homeTab, feedLat, feedLng, feedRadiusMi]);
 
   // Background unread-count polling (any screen, so badges appear in nav / order lists)
   useEffect(() => {
@@ -2152,6 +2192,44 @@ export default function Home() {
             {/* ================= COMMUNITY FEED (inside Discover screen) ================= */}
             {homeTab === 'feed' && (
               <div style={{ padding: '0 0 20px' }}>
+                {/* Proximity control row */}
+                <div style={{ padding: '12px 20px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    onClick={() => {
+                      if (feedLocationStatus === 'denied') {
+                        // User previously blocked location; try again
+                        requestFeedLocation();
+                      } else {
+                        setShowRadiusPanel(true);
+                      }
+                    }}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '7px 12px',
+                      background: feedLat != null ? C.ink : C.cardAlt,
+                      color: feedLat != null ? '#fff' : C.inkSoft,
+                      borderRadius: 20,
+                      font: `500 12px ${font.sans}`,
+                    }}
+                  >
+                    <MapPin size={13} />
+                    {feedLocationStatus === 'requesting' && 'Locating…'}
+                    {feedLocationStatus === 'granted' && `Within ${feedRadiusMi < 1 ? feedRadiusMi.toFixed(1) : Math.round(feedRadiusMi)} mi`}
+                    {feedLocationStatus === 'denied' && 'Enable location'}
+                    {feedLocationStatus === 'unknown' && 'Set location'}
+                  </button>
+                  {feedLocationStatus === 'denied' && (
+                    <span style={{ font: `400 11px ${font.sans}`, color: C.muted }}>
+                      Showing all posts globally
+                    </span>
+                  )}
+                  {feedLocationStatus === 'granted' && (
+                    <span style={{ font: `400 11px ${font.sans}`, color: C.muted }}>
+                      {posts.length} nearby
+                    </span>
+                  )}
+                </div>
+
                 {/* Composer */}
                 <div style={{ padding: '14px 20px 0' }}>
                   <div style={{ background: C.card, borderRadius: 16, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
@@ -2208,8 +2286,20 @@ export default function Home() {
                   {posts.length === 0 ? (
                     <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted }}>
                       <ChefHat size={30} style={{ opacity: .4, marginBottom: 10 }} />
-                      <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>The feed is quiet</div>
-                      <div style={{ font: `400 12px ${font.sans}`, marginTop: 4 }}>Be the first to share what you&apos;re making today.</div>
+                      <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>
+                        {feedLocationStatus === 'granted' ? `No posts within ${feedRadiusMi < 1 ? feedRadiusMi.toFixed(1) : Math.round(feedRadiusMi)} mi` : 'The feed is quiet'}
+                      </div>
+                      <div style={{ font: `400 12px ${font.sans}`, marginTop: 4 }}>
+                        {feedLocationStatus === 'granted' ? 'Try expanding your radius or check back later.' : "Be the first to share what you're making today."}
+                      </div>
+                      {feedLocationStatus === 'granted' && (
+                        <button
+                          onClick={() => setShowRadiusPanel(true)}
+                          style={{ marginTop: 12, padding: '8px 14px', background: C.terracotta, color: '#fff', borderRadius: 20, font: `500 12.5px ${font.sans}` }}
+                        >
+                          Expand radius
+                        </button>
+                      )}
                     </div>
                   ) : (
                     posts.map(p => {
@@ -2257,8 +2347,19 @@ export default function Home() {
                                   <span style={{ padding: '1px 6px', background: C.greenLight, color: C.green, borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.03em' }}>COOK</span>
                                 )}
                               </div>
-                              <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 1 }}>
-                                {timeAgo(p.created_at)} · {expiresIn(p.expires_at)}
+                              <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 1, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                                <span>{timeAgo(p.created_at)}</span>
+                                <span>·</span>
+                                <span>{expiresIn(p.expires_at)}</span>
+                                {p.distance_mi != null && (
+                                  <>
+                                    <span>·</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: C.terracotta, fontWeight: 500 }}>
+                                      <MapPin size={9} />
+                                      {p.distance_mi < 0.1 ? 'here' : p.distance_mi < 1 ? `${(p.distance_mi * 5280 / 100 | 0) * 100} ft` : `${p.distance_mi.toFixed(1)} mi`}
+                                    </span>
+                                  </>
+                                )}
                               </div>
                             </div>
                             {canModerate && (
@@ -4089,6 +4190,82 @@ export default function Home() {
                   No dishes found.
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= RADIUS PANEL (feed proximity) ================= */}
+        {showRadiusPanel && (
+          <div
+            onClick={() => setShowRadiusPanel(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(30,15,5,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1400, animation: 'plfade .25s ease' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ background: C.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 22px 24px', width: '100%', maxWidth: 430, boxShadow: '0 -8px 30px rgba(0,0,0,.2)' }}
+            >
+              <div style={{ width: 44, height: 4, background: C.divider, borderRadius: 2, margin: '0 auto 14px' }} />
+              <div style={{ font: `500 18px ${font.serif}`, color: C.ink, marginBottom: 4 }}>How far should we look?</div>
+              <div style={{ font: `400 12.5px ${font.sans}`, color: C.muted, marginBottom: 18 }}>
+                Only see posts from cooks within this distance.
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 12 }}>
+                <div style={{ font: `600 40px ${font.serif}`, color: C.terracotta, lineHeight: 1 }}>
+                  {feedRadiusMi < 1 ? feedRadiusMi.toFixed(1) : Math.round(feedRadiusMi)}
+                </div>
+                <div style={{ font: `500 14px ${font.sans}`, color: C.muted }}>miles</div>
+              </div>
+
+              {/* Slider — 0.5 → 50 mi. We use a log-ish curve so lower ranges get more granularity. */}
+              <input
+                type="range"
+                min={0.5}
+                max={50}
+                step={0.5}
+                value={feedRadiusMi}
+                onChange={(e) => setFeedRadiusMi(parseFloat(e.target.value))}
+                style={{ width: '100%', accentColor: C.terracotta }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, font: `400 10.5px ${font.sans}`, color: C.muted }}>
+                <span>0.5 mi</span>
+                <span>10 mi</span>
+                <span>25 mi</span>
+                <span>50 mi</span>
+              </div>
+
+              {/* Quick presets */}
+              <div style={{ display: 'flex', gap: 6, marginTop: 16, flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Walk (0.5)', val: 0.5 },
+                  { label: 'Bike (2)', val: 2 },
+                  { label: 'Nearby (5)', val: 5 },
+                  { label: 'Cross-town (15)', val: 15 },
+                  { label: 'Metro (50)', val: 50 },
+                ].map(p => (
+                  <button
+                    key={p.val}
+                    onClick={() => setFeedRadiusMi(p.val)}
+                    style={{
+                      padding: '7px 12px',
+                      background: feedRadiusMi === p.val ? C.ink : C.surface,
+                      color: feedRadiusMi === p.val ? '#fff' : C.inkSoft,
+                      border: `1px solid ${feedRadiusMi === p.val ? C.ink : C.divider}`,
+                      borderRadius: 16,
+                      font: `500 11.5px ${font.sans}`,
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setShowRadiusPanel(false)}
+                style={{ width: '100%', padding: 14, background: C.terracotta, color: '#fff', borderRadius: 14, font: `500 14px ${font.sans}`, marginTop: 18 }}
+              >
+                Done
+              </button>
             </div>
           </div>
         )}

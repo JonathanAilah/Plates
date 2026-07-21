@@ -20,7 +20,18 @@ export async function GET(request: NextRequest) {
     if (action === 'feed') {
       // Public: anonymous users can browse the feed too, they just can't post/react
       const me = await getSessionUser();
-      const feed = await getFeed(me?.id ?? null);
+      // Optional proximity filter — passed as query params
+      const latParam = searchParams.get('lat');
+      const lngParam = searchParams.get('lng');
+      const radiusParam = searchParams.get('radiusMi');
+      const lat = latParam ? parseFloat(latParam) : null;
+      const lng = lngParam ? parseFloat(lngParam) : null;
+      const radiusMi = radiusParam ? parseFloat(radiusParam) : null;
+      // Sanity-clamp radius to prevent absurd queries
+      const clampedRadius = radiusMi != null && Number.isFinite(radiusMi)
+        ? Math.max(0.1, Math.min(500, radiusMi))
+        : null;
+      const feed = await getFeed(me?.id ?? null, lat, lng, clampedRadius);
       return NextResponse.json(feed);
     }
 
