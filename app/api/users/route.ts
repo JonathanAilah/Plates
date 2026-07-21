@@ -96,6 +96,8 @@ export async function POST(request: NextRequest) {
         kitchenEnvironment: body.kitchenEnvironment,
         cookingHours: body.cookingHours,
         pickupDescription: body.pickupDescription,
+        pickupMinMinutes: body.pickupMinMinutes,
+        pickupMaxMinutes: body.pickupMaxMinutes,
       });
       return NextResponse.json(user);
     }

@@ -16,8 +16,11 @@ interface Dish {
   seller_latitude: number | null;
   seller_longitude: number | null;
   seller_kitchen_flags: string | null;
+  seller_kitchen_environment: string | null;
   seller_pickup_description: string | null;
   seller_cooking_hours: string | null;
+  seller_pickup_min_minutes: number | null;
+  seller_pickup_max_minutes: number | null;
   emoji: string;
   photo_url: string | null;
   price: number;
@@ -101,6 +104,8 @@ interface CartItem {
   seller_photo_url: string | null;
   seller_latitude: number | null;
   seller_longitude: number | null;
+  seller_pickup_min_minutes: number | null;
+  seller_pickup_max_minutes: number | null;
 }
 
 type OrderStatus = 'placed' | 'accepted' | 'cooking' | 'ready' | 'picked_up' | 'cancelled';
@@ -230,6 +235,8 @@ interface User {
   kitchen_environment: string | null;
   cooking_hours: string | null;
   pickup_description: string | null;
+  pickup_min_minutes: number | null;
+  pickup_max_minutes: number | null;
   role: 'user' | 'admin';
   seller_status: 'not_seller' | 'pending' | 'approved' | 'rejected' | 'suspended';
   rejection_reason: string | null;
@@ -347,6 +354,8 @@ export default function Home() {
   const [cpFlagNutFree, setCpFlagNutFree] = useState(false);
   const [cpFlagGlutenFree, setCpFlagGlutenFree] = useState(false);
   const [cpKitchenEnvironment, setCpKitchenEnvironment] = useState<string>('');
+  const [cpPickupMin, setCpPickupMin] = useState<number>(15);
+  const [cpPickupMax, setCpPickupMax] = useState<number>(120);
   const [cpCookingHours, setCpCookingHours] = useState('');
   const [cpPickupDesc, setCpPickupDesc] = useState('');
   const [cpSaving, setCpSaving] = useState(false);
@@ -1135,6 +1144,19 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  // Clamp pickup duration whenever the cart changes so it stays within cook bounds
+  useEffect(() => {
+    if (cart.length === 0) return;
+    const mins = cart.map(i => i.seller_pickup_min_minutes ?? 15);
+    const maxes = cart.map(i => i.seller_pickup_max_minutes ?? 120);
+    const effectiveMin = Math.max(...mins);
+    const effectiveMax = Math.min(...maxes);
+    if (effectiveMax <= effectiveMin) return; // Invalid range — leave alone
+    if (pickupDurationMin < effectiveMin) setPickupDurationMin(effectiveMin);
+    else if (pickupDurationMin > effectiveMax) setPickupDurationMin(effectiveMax);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart]);
+
   // Admin: poll pending count so a red banner appears when new sellers submit
   useEffect(() => {
     if (!user || user.role !== 'admin') return;
@@ -1581,6 +1603,8 @@ export default function Home() {
     setCpCookingHours(user.cooking_hours || '');
     setCpPickupDesc(user.pickup_description || '');
     setCpKitchenEnvironment(user.kitchen_environment || '');
+    setCpPickupMin(user.pickup_min_minutes ?? 15);
+    setCpPickupMax(user.pickup_max_minutes ?? 120);
     const flags = (user.kitchen_flags || '').split(',').map(s => s.trim());
     setCpFlagPets(flags.includes('pets'));
     setCpFlagSmokers(flags.includes('smokers'));
@@ -1614,6 +1638,8 @@ export default function Home() {
           kitchenEnvironment: cpKitchenEnvironment || null,
           cookingHours: cpCookingHours || null,
           pickupDescription: cpPickupDesc || null,
+          pickupMinMinutes: cpPickupMin,
+          pickupMaxMinutes: cpPickupMax,
         }),
       });
       const updated = await res.json();
@@ -2204,6 +2230,9 @@ export default function Home() {
                           {dist !== null && (
                             <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
                           )}
+                          {dish.seller_kitchen_environment && (
+                            <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dish.seller_kitchen_environment}</span>
+                          )}
                           <RatingChip dish={dish} size={11} />
                           <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
                         </div>
@@ -2565,9 +2594,14 @@ export default function Home() {
                     </div>
                     <div style={{ font: `500 11px ${font.sans}`, color: C.terracotta, whiteSpace: 'nowrap' }}>View profile →</div>
                   </div>
-                  {selectedDish.seller_kitchen_flags && (
+                  {(selectedDish.seller_kitchen_environment || selectedDish.seller_kitchen_flags) && (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
-                      {selectedDish.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).map(flag => (
+                      {selectedDish.seller_kitchen_environment && (
+                        <span style={{ background: C.greenLight, color: C.green, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
+                          {selectedDish.seller_kitchen_environment}
+                        </span>
+                      )}
+                      {selectedDish.seller_kitchen_flags && selectedDish.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).map(flag => (
                         <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
                         {flag.charAt(0).toUpperCase() + flag.slice(1).replace('-', ' ')}
                       </span>
@@ -2761,40 +2795,63 @@ export default function Home() {
 
                 <div style={{ padding: '18px 22px 0' }}>
                   <div style={{ background: C.card, borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft }}>Pick up in</div>
-                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted }}>
-                        {(() => {
-                          const t = new Date(Date.now() + pickupDurationMin * 60_000);
-                          const hh = t.getHours();
-                          const mm = String(t.getMinutes()).padStart(2, '0');
-                          const ampm = hh >= 12 ? 'PM' : 'AM';
-                          const displayH = hh % 12 === 0 ? 12 : hh % 12;
-                          return `~${displayH}:${mm} ${ampm}`;
-                        })()}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
-                      <div style={{ font: `600 32px ${font.serif}`, color: C.terracotta, lineHeight: 1 }}>
-                        {pickupDurationMin < 60 ? pickupDurationMin : `${Math.floor(pickupDurationMin / 60)}h${pickupDurationMin % 60 ? ' ' + (pickupDurationMin % 60) + 'm' : ''}`}
-                      </div>
-                      {pickupDurationMin < 60 && <div style={{ font: `500 14px ${font.sans}`, color: C.muted }}>minutes</div>}
-                    </div>
-                    <input
-                      type="range"
-                      min={15}
-                      max={120}
-                      step={15}
-                      value={pickupDurationMin}
-                      onChange={(e) => setPickupDurationMin(parseInt(e.target.value))}
-                      style={{ width: '100%', accentColor: C.terracotta }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, font: `400 10.5px ${font.sans}`, color: C.muted }}>
-                      <span>15 min</span>
-                      <span>30 min</span>
-                      <span>1 hr</span>
-                      <span>2 hr</span>
-                    </div>
+                    {(() => {
+                      // Compute effective bounds: intersection of all cook bounds in cart.
+                      const mins = cart.map(i => i.seller_pickup_min_minutes ?? 15);
+                      const maxes = cart.map(i => i.seller_pickup_max_minutes ?? 120);
+                      const effectiveMin = mins.length > 0 ? Math.max(...mins) : 15;
+                      const effectiveMax = maxes.length > 0 ? Math.min(...maxes) : 120;
+                      const validRange = effectiveMax > effectiveMin;
+                      // Clamp the display value inline — the effect below syncs state on cart change
+                      const boundedValue = validRange
+                        ? Math.max(effectiveMin, Math.min(effectiveMax, pickupDurationMin))
+                        : effectiveMin;
+                      const cookSetBounds = cart.some(i => i.seller_pickup_min_minutes != null || i.seller_pickup_max_minutes != null);
+                      return (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft }}>Pick up in</div>
+                            <div style={{ font: `500 12px ${font.sans}`, color: C.muted }}>
+                              {(() => {
+                                const t = new Date(Date.now() + boundedValue * 60_000);
+                                const hh = t.getHours();
+                                const mm = String(t.getMinutes()).padStart(2, '0');
+                                const ampm = hh >= 12 ? 'PM' : 'AM';
+                                const displayH = hh % 12 === 0 ? 12 : hh % 12;
+                                return `~${displayH}:${mm} ${ampm}`;
+                              })()}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
+                            <div style={{ font: `600 32px ${font.serif}`, color: C.terracotta, lineHeight: 1 }}>
+                              {boundedValue < 60 ? boundedValue : `${Math.floor(boundedValue / 60)}h${boundedValue % 60 ? ' ' + (boundedValue % 60) + 'm' : ''}`}
+                            </div>
+                            {boundedValue < 60 && <div style={{ font: `500 14px ${font.sans}`, color: C.muted }}>minutes</div>}
+                          </div>
+                          <input
+                            type="range"
+                            min={effectiveMin}
+                            max={effectiveMax}
+                            step={5}
+                            value={boundedValue}
+                            onChange={(e) => setPickupDurationMin(parseInt(e.target.value))}
+                            disabled={!validRange}
+                            style={{ width: '100%', accentColor: C.terracotta }}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, font: `400 10.5px ${font.sans}`, color: C.muted }}>
+                            <span>{effectiveMin < 60 ? `${effectiveMin} min` : `${Math.floor(effectiveMin / 60)}h`}</span>
+                            <span>{effectiveMax < 60 ? `${effectiveMax} min` : `${Math.floor(effectiveMax / 60)}h${effectiveMax % 60 ? (effectiveMax % 60) + 'm' : ''}`}</span>
+                          </div>
+                          {cookSetBounds && (
+                            <div style={{ marginTop: 8, font: `400 11px ${font.sans}`, color: C.muted }}>
+                              {cart.length === 1
+                                ? `${cart[0].seller_name} accepts pickups from ${effectiveMin} min to ${effectiveMax < 60 ? effectiveMax + ' min' : Math.floor(effectiveMax / 60) + 'h'}`
+                                : `Range narrowed to fit all cooks in your cart`}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -3304,6 +3361,53 @@ export default function Home() {
                   <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>{f.label}</div>
                 </div>
               ))}
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Pickup time window</div>
+              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>
+                Buyers can choose any pickup time between your minimum and maximum.
+              </div>
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>
+                Minimum: <span style={{ color: C.terracotta }}>{cpPickupMin < 60 ? `${cpPickupMin} min` : `${Math.floor(cpPickupMin / 60)}h${cpPickupMin % 60 ? ' ' + (cpPickupMin % 60) + 'm' : ''}`}</span>
+              </label>
+              <input
+                type="range"
+                min={5}
+                max={120}
+                step={5}
+                value={cpPickupMin}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  setCpPickupMin(val);
+                  if (val >= cpPickupMax) setCpPickupMax(Math.min(240, val + 15));
+                }}
+                style={{ width: '100%', accentColor: C.terracotta, marginBottom: 4 }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', font: `400 10px ${font.sans}`, color: C.muted, marginBottom: 14 }}>
+                <span>5 min</span><span>1 hr</span><span>2 hr</span>
+              </div>
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>
+                Maximum: <span style={{ color: C.terracotta }}>{cpPickupMax < 60 ? `${cpPickupMax} min` : `${Math.floor(cpPickupMax / 60)}h${cpPickupMax % 60 ? ' ' + (cpPickupMax % 60) + 'm' : ''}`}</span>
+              </label>
+              <input
+                type="range"
+                min={15}
+                max={240}
+                step={5}
+                value={cpPickupMax}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  setCpPickupMax(val);
+                  if (val <= cpPickupMin) setCpPickupMin(Math.max(5, val - 15));
+                }}
+                style={{ width: '100%', accentColor: C.terracotta, marginBottom: 4 }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', font: `400 10px ${font.sans}`, color: C.muted }}>
+                <span>15 min</span><span>2 hr</span><span>4 hr</span>
+              </div>
             </div>
 
             <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>

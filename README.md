@@ -1,68 +1,76 @@
-# Plates — Pickup time picker (15 min → 2 hr)
+# Plates — Cook-controlled pickup bounds + kitchen environment on meal card
 
-Replaced the useless ASAP/Schedule toggle with a real duration slider. Buyer picks 15-120 min, cook sees the pickup clock time on their kitchen queue.
+Two features stacked.
 
-## What changed
+## Feature 1: Cook sets pickup time bounds
 
-**Cart screen: new pickup time card**
-Instead of two identical-looking ASAP/Schedule buttons that did nothing, there's now a compact card with:
-- Big number showing the chosen duration ("30 minutes" or "1h 30m")
-- Small preview showing the actual clock time it converts to (e.g. "~6:47 PM")
-- A slider from 15 to 120 minutes in 15-minute steps
-- Labels at the endpoints: 15 min · 30 min · 1 hr · 2 hr
+Each cook can now define their own minimum and maximum pickup time. Buyers can only choose within that window.
 
-Default is 30 minutes (a reasonable middle ground).
+**In the Kitchen profile**, a new "Pickup time window" section appears with two sliders:
+- **Minimum**: 5 min to 120 min in 5-min steps
+- **Maximum**: 15 min to 240 min (4 hours) in 5-min steps
 
-**Backend: pickup_at timestamp on orders**
-- New column `orders.pickup_at TIMESTAMP` — the actual clock time the buyer expects to pick up
-- Computed at order placement: `now + selected duration`
-- `createOrder`, `checkoutCart`, and the cart API all pass this through
+The sliders auto-adjust each other so max is always > min. Default is 15 min minimum / 120 min maximum (matches the old hard-coded values).
 
-**Buyer's Order Detail: pickup time card**
-Below the status header (only shown while order is active, not for picked-up/cancelled):
-- "PICKUP TIME" header
-- Clock time (e.g. "6:47 PM")
-- Relative time: "in 32 min" — and if you're overdue, "Overdue by 5 min ago" with a yellow warning color
+**In the buyer's Cart**, the pickup time slider now:
+- **min = MAX of all cooks' minimums in the cart**
+- **max = MIN of all cooks' maximums in the cart**
+- Slider steps changed from 15 to 5 min (finer control now that cooks may have narrower ranges)
+- Below the slider, shows the applicable range as text:
+  - Single cook: `"Marisol Vega accepts pickups from 25 min to 90 min"`
+  - Multi-cook: `"Range narrowed to fit all cooks in your cart"`
 
-**Cook's Kitchen Queue: pickup chip on each order row**
-Chip next to the status pill:
-- "🔔 6:47 PM · in 32 min" — helps cooks pace their prep
-- Turns yellow with "overdue X min ago" if the buyer hasn't arrived by their picked time
+**Edge cases handled:**
+- If one cook needs 40 min minimum and another has a 30 min maximum, the range collapses to nothing — the slider gets disabled and shows the invalid range
+- If the buyer's chosen duration is outside a new bound (e.g. they had 30 min selected but then added a cook who needs 45 min), the effect clamps it to the new valid range
+- Cooks who haven't set bounds fall back to defaults (15..120)
 
-**The old ASAP/Schedule toggle is completely removed.**
-The `pickupTiming` state variable is gone. Replaced by `pickupDurationMin` (a number, default 30).
+## Feature 2: Kitchen environment on the meal card
+
+The "Home kitchen / Food truck / Community kitchen" etc that cooks set last session is now visible to buyers.
+
+**On the meal detail page**, shown as a green chip next to the kitchen flags (e.g. "Home kitchen", "Nut-free kitchen"). Distinct color so it stands out from the dietary flags.
+
+**On dish list rows on Discover**, a compact tan chip shows the environment (e.g. "Food truck") alongside the distance and rating chips. If the cook hasn't set an environment, no chip appears.
+
+## Schema
+
+Two new columns on `users`:
+- `pickup_min_minutes INTEGER` — cook's minimum pickup duration (null = default 15)
+- `pickup_max_minutes INTEGER` — cook's maximum (null = default 120)
+
+Existing `kitchen_environment` column is now also SELECTed in `getDishes` (was set but not fetched).
 
 ## Files
 
-- `lib/db.ts` — pickup_at column added; createOrder + checkoutCart accept it; getOrders + getSellerOrders SELECT it
-- `app/api/cart/route.ts` — passes pickupAt through to checkoutCart
-- `app/page.tsx` — replaces toggle with slider, adds formatPickupAt helper, displays on order detail and kitchen queue
+- `lib/db.ts` — new columns + updateCookProfile signature + getDishes/getCart include the bounds
+- `app/api/users/route.ts` — passes pickupMinMinutes and pickupMaxMinutes through
+- `app/page.tsx` — cook's dual sliders, cart's bounded slider, kitchen env chips on meal detail + dish rows
 
 ## Install
 
-1. Extract this zip.
-2. Copy files into your local repo, overwriting.
-3. Commit: `Replace pickup toggle with 15-120 min duration slider`
-4. Push origin — Vercel auto-deploys.
+1. Extract zip.
+2. Overwrite the three files.
+3. Commit: `Cook-defined pickup bounds + kitchen env on meal cards`
+4. Push. Migrations run on next load.
 
-Migration runs automatically on next app load. Existing orders will have `pickup_at = NULL`, which is fine — they just won't show the pickup card.
-
-## What to test
-
-**As buyer:**
-1. Add something to cart. Cart screen shows the new pickup slider.
-2. Default is 30 minutes. Big number reads "30 minutes". Small text shows a clock time 30 min from now.
-3. Drag slider to 90. Shows "1h 30m" and updated clock time.
-4. Tap Place order.
-5. Open Order Detail → sees a "PICKUP TIME" card with the clock time and "in ~90 min".
+## Test
 
 **As cook:**
-6. Open kitchen queue. On that new order, see a terracotta chip "🔔 8:17 PM · in 89 min" next to the status.
-7. Wait until the pickup time passes — the chip turns yellow and shows "overdue X min ago".
+1. Cook → Kitchen profile → scroll to "Pickup time window".
+2. Set min to 25 min, max to 60 min. Save.
+3. Sign out.
+
+**As buyer:**
+4. Sign in as buyer. Add one of that cook's dishes to cart.
+5. Open Cart. Pickup slider should now be locked between 25 and 60 min.
+6. Under the slider: "Cook Name accepts pickups from 25 min to 1h".
+7. On Discover, that cook's dish row shows the "Home kitchen" (or whatever they set) chip next to distance/rating.
+8. Tap into the dish → meal detail shows the green "Home kitchen" badge inside the seller card.
 
 ## Design decisions
 
-- **Timestamp not duration**: stored as an actual clock time so cooks see when to be ready without doing math. Also survives if you look at the order 12 hours later.
-- **15-minute steps**: matches how humans think about time. 27 minutes isn't a useful precision.
-- **No "ASAP"**: 15 minutes IS ASAP for home-cooked food. If a cook is at their station with a hot pan, 15 min is realistic. Anything faster is unrealistic anyway.
-- **Overdue is visual, not blocking**: we don't cancel or block anything if the buyer is late. Real life has traffic. Cook sees the flag and can act accordingly.
+- **Bounds are per-cook, not per-dish**: matches the reality that a home cook has one kitchen with one set of constraints. Simpler UI too.
+- **Cart intersects bounds, not per-item**: real-world, if you order from two cooks, you pick ONE time that works for both. Simplest UX.
+- **5-minute step in cart** (was 15): now that cooks can set 25 or 35 min minimums, 15-min steps were too coarse.
+- **Kitchen environment shown in green (meal detail)**: distinct from dietary flags (surface color) so buyers can visually parse "where" vs "what allergens".

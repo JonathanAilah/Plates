@@ -28,6 +28,9 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS permit_number TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_flags TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_environment TEXT`;
+    // Cook-defined pickup time bounds (in minutes). Buyers choose within [min, max].
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_min_minutes INTEGER`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_max_minutes INTEGER`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_hours TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_description TEXT`;
     // Auth columns
@@ -253,6 +256,8 @@ export async function updateCookProfile(id: number, data: {
   kitchenEnvironment?: string | null;
   cookingHours?: string | null;
   pickupDescription?: string | null;
+  pickupMinMinutes?: number | null;
+  pickupMaxMinutes?: number | null;
 }) {
   const result = await sql`
     UPDATE users SET
@@ -264,7 +269,9 @@ export async function updateCookProfile(id: number, data: {
       kitchen_flags = COALESCE(${data.kitchenFlags ?? null}, kitchen_flags),
       kitchen_environment = COALESCE(${data.kitchenEnvironment ?? null}, kitchen_environment),
       cooking_hours = COALESCE(${data.cookingHours ?? null}, cooking_hours),
-      pickup_description = COALESCE(${data.pickupDescription ?? null}, pickup_description)
+      pickup_description = COALESCE(${data.pickupDescription ?? null}, pickup_description),
+      pickup_min_minutes = COALESCE(${data.pickupMinMinutes ?? null}, pickup_min_minutes),
+      pickup_max_minutes = COALESCE(${data.pickupMaxMinutes ?? null}, pickup_max_minutes)
     WHERE id = ${id} RETURNING *
   `;
   return result.rows[0];
@@ -310,8 +317,11 @@ export async function getDishes() {
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
            u.kitchen_flags as seller_kitchen_flags,
+           u.kitchen_environment as seller_kitchen_environment,
            u.pickup_description as seller_pickup_description,
            u.cooking_hours as seller_cooking_hours,
+           u.pickup_min_minutes as seller_pickup_min_minutes,
+           u.pickup_max_minutes as seller_pickup_max_minutes,
            COALESCE(r.avg_rating, 0) as avg_rating,
            COALESCE(r.review_count, 0)::int as review_count
     FROM dishes d
@@ -466,7 +476,9 @@ export async function getCart(buyerId: number) {
   const result = await sql`
     SELECT c.id as cart_item_id, c.quantity, d.*,
            u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
-           u.latitude as seller_latitude, u.longitude as seller_longitude
+           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           u.pickup_min_minutes as seller_pickup_min_minutes,
+           u.pickup_max_minutes as seller_pickup_max_minutes
     FROM cart_items c
     JOIN dishes d ON c.dish_id = d.id
     JOIN users u ON d.seller_id = u.id
