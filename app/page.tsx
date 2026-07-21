@@ -2166,7 +2166,7 @@ export default function Home() {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
                           {dist !== null && (
-                            <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `${dist.toFixed(1)} mi`} · {etaMinutes(dist)} min</span>
+                            <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
                           )}
                           <RatingChip dish={dish} size={11} />
                           <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
@@ -2501,7 +2501,7 @@ export default function Home() {
               <div style={{ display: 'flex', gap: 6, marginTop: 14, flexWrap: 'wrap' }}>
                 {user.latitude != null && user.longitude != null && selectedDish.seller_latitude != null && selectedDish.seller_longitude != null && (
                   <span style={{ background: C.greenLight, color: C.green, padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
-                    {distanceMiles(user.latitude, user.longitude, selectedDish.seller_latitude, selectedDish.seller_longitude).toFixed(1)} mi · pickup ~{etaMinutes(distanceMiles(user.latitude, user.longitude, selectedDish.seller_latitude, selectedDish.seller_longitude))} min
+                    ~{distanceMiles(user.latitude, user.longitude, selectedDish.seller_latitude, selectedDish.seller_longitude).toFixed(1)} mi away
                   </span>
                 )}
                 <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>Homemade</span>
@@ -3685,14 +3685,14 @@ export default function Home() {
           );
         })()}
 
-        {(screen === 'feed' || screen === 'cart') && (
+        {(screen === 'feed') && (
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0 14px', maxWidth: 430, margin: '0 auto' }}>
-            <button onClick={() => setScreen('feed')} style={{ textAlign: 'center', color: screen === 'feed' ? C.terracotta : C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-              <Compass size={22} strokeWidth={screen === 'feed' ? 2.5 : 2} />
+            <button onClick={() => setScreen('feed')} style={{ textAlign: 'center', color: C.terracotta, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <Compass size={22} strokeWidth={2.5} />
               <span style={{ font: `500 10px ${font.sans}` }}>Discover</span>
             </button>
-            <button onClick={() => setScreen('cart')} style={{ textAlign: 'center', color: screen === 'cart' ? C.terracotta : C.mutedLight, position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-              <ShoppingBag size={22} strokeWidth={screen === 'cart' ? 2.5 : 2} />
+            <button onClick={() => setScreen('cart')} style={{ textAlign: 'center', color: C.mutedLight, position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <ShoppingBag size={22} strokeWidth={2} />
               {cartCount > 0 && (
                 <span style={{ position: 'absolute', top: -4, right: '50%', marginRight: -18, minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8, background: C.terracotta, color: '#fff', font: `500 9px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{cartCount}</span>
               )}
