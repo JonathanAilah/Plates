@@ -31,15 +31,15 @@ export async function POST(request: NextRequest) {
 
     if (action === 'create') {
       const order = await createOrder(buyerId, dishId, quantity, totalPrice);
-      
-      setTimeout(async () => {
-        await updateOrderStatus(order.id, 'ready');
-      }, 3000);
-
       return NextResponse.json(order);
     }
 
     if (action === 'updateStatus') {
+      // Whitelist valid statuses
+      const valid = ['placed', 'accepted', 'cooking', 'ready', 'picked_up', 'cancelled'];
+      if (!valid.includes(status)) {
+        return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
+      }
       const order = await updateOrderStatus(orderId, status);
       return NextResponse.json(order);
     }

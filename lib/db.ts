@@ -62,11 +62,16 @@ export async function initializeDatabase() {
         dish_id INTEGER NOT NULL REFERENCES dishes(id) ON DELETE CASCADE,
         quantity INTEGER NOT NULL,
         total_price DECIMAL(10, 2) NOT NULL,
-        status VARCHAR(50) DEFAULT 'processing',
+        status VARCHAR(50) DEFAULT 'placed',
+        pickup_code VARCHAR(4),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `;
+
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_code VARCHAR(4)`;
+    // Migrate any legacy 'processing' status to the new 'placed'
+    await sql`UPDATE orders SET status = 'placed' WHERE status = 'processing'`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS cart_items (
@@ -246,7 +251,16 @@ export async function createOrder(buyerId: number, dishId: number, quantity: num
 
 export async function getOrders(buyerId: number) {
   const result = await sql`
-    SELECT o.*, d.name, d.emoji, u.name as seller_name
+    SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
+           o.created_at, o.updated_at,
+           d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url, d.price as dish_price,
+           u.id as seller_id, u.name as seller_name, u.avatar as seller_avatar,
+           u.photo_url as seller_photo_url,
+           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           u.prep_address as seller_address,
+           u.kitchen_name as seller_kitchen_name,
+           u.cooking_hours as seller_cooking_hours,
+           u.pickup_description as seller_pickup_description
     FROM orders o
     JOIN dishes d ON o.dish_id = d.id
     JOIN users u ON d.seller_id = u.id
@@ -267,7 +281,10 @@ export async function updateOrderStatus(orderId: string, status: string) {
 
 export async function getSellerOrders(sellerId: number) {
   const result = await sql`
-    SELECT o.*, d.name, d.emoji, u.name as buyer_name
+    SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
+           o.created_at, o.updated_at,
+           d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url,
+           u.name as buyer_name, u.avatar as buyer_avatar, u.photo_url as buyer_photo_url
     FROM orders o
     JOIN dishes d ON o.dish_id = d.id
     JOIN users u ON o.buyer_id = u.id
@@ -331,9 +348,10 @@ export async function checkoutCart(buyerId: number, tipAmount: number, serviceFe
   for (const item of items) {
     const linePrice = Number(item.price) * item.quantity;
     total += linePrice;
+    const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode})
       RETURNING *
     `;
     orders.push(order.rows[0]);
