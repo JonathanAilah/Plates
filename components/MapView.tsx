@@ -177,34 +177,84 @@ export default function MapView({
 
     let cancelled = false;
 
+    // Compute pin size based on current zoom level.
+    // Zoom 15+ (street) → 64px, zoom 8- (regional) → 20px, linear between.
+    const sizeForZoom = (z: number): number => {
+      if (z >= 15) return 64;
+      if (z <= 8) return 20;
+      // Interpolate between 20 (at z=8) and 64 (at z=15)
+      return Math.round(20 + ((z - 8) / (15 - 8)) * (64 - 20));
+    };
+
+    // Cache the icon URL per pin so we don't rebuild the SVG on every zoom event.
+    // We do keep width/height dynamic (via scaledSize).
+    const iconCache: { url: string; hasLabel: boolean }[] = [];
+
+    const buildMarker = (pin: MapPin, iconIndex: number, currentZoom: number) => {
+      const size = sizeForZoom(currentZoom);
+      // Hide the price tail at small zoom levels — it becomes unreadable
+      const showLabel = size >= 40 && !!pin.label;
+      const totalH = size + (showLabel ? Math.round(size * 0.4) : Math.round(size * 0.06));
+      return new maps.Marker({
+        position: { lat: pin.lat, lng: pin.lng },
+        map: mapRef.current,
+        icon: {
+          url: iconCache[iconIndex].url,
+          scaledSize: new maps.Size(size, totalH),
+          anchor: new maps.Point(size / 2, size / 2),
+        },
+      });
+    };
+
     const render = async () => {
+      // First pass: load all photos and build SVGs
       for (const pin of pins) {
-        // Try to load a photo for this pin (if provided); fall back gracefully
         let photoData: string | null = null;
         if (pin.photoUrl) {
           try { photoData = await loadImageAsDataUrl(pin.photoUrl); }
           catch { photoData = null; }
         }
         if (cancelled) return;
-
         const iconUrl = buildDishMarkerSvg(photoData, pin.emoji || '🍽️', pin.label);
-        const size = 64;
-        const totalH = size + (pin.label ? 26 : 4);
-        const marker = new maps.Marker({
-          position: { lat: pin.lat, lng: pin.lng },
-          map: mapRef.current,
-          icon: {
-            url: iconUrl,
-            scaledSize: new maps.Size(size, totalH),
-            anchor: new maps.Point(size / 2, size / 2),
-          },
-        });
+        iconCache.push({ url: iconUrl, hasLabel: !!pin.label });
+      }
+      if (cancelled) return;
+
+      // Second pass: create markers at current zoom
+      const currentZoom = mapRef.current.getZoom() || 13;
+      pins.forEach((pin, i) => {
+        const marker = buildMarker(pin, i, currentZoom);
         if (pin.onClick) marker.addListener('click', pin.onClick);
         markersRef.current.push(marker);
-      }
+      });
+
+      // Listen for zoom changes and rescale
+      const zoomListener = mapRef.current.addListener('zoom_changed', () => {
+        const z = mapRef.current.getZoom() || 13;
+        const size = sizeForZoom(z);
+        markersRef.current.forEach((marker, i) => {
+          const showLabel = size >= 40 && iconCache[i]?.hasLabel;
+          const totalH = size + (showLabel ? Math.round(size * 0.4) : Math.round(size * 0.06));
+          marker.setIcon({
+            url: iconCache[i].url,
+            scaledSize: new maps.Size(size, totalH),
+            anchor: new maps.Point(size / 2, size / 2),
+          });
+        });
+      });
+
+      // Save listener so we can clean it up
+      (markersRef.current as any).__zoomListener = zoomListener;
     };
     render();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+      const listener = (markersRef.current as any).__zoomListener;
+      if (listener && (window as any).google?.maps) {
+        (window as any).google.maps.event.removeListener(listener);
+      }
+    };
   }, [pins, ready]);
 
   // User location marker (blue dot)
