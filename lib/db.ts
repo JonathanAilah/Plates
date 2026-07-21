@@ -164,6 +164,8 @@ export async function initializeDatabase() {
     // Add pickup_slot column to orders — stores the buyer's chosen slot as HH:MM (or null for ASAP)
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_slot TEXT`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_date DATE`;
+    // New: single timestamp for pickup time (replaces the slot+date approach)
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_at TIMESTAMP`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS post_comments (
@@ -406,10 +408,10 @@ export async function isLiked(userId: number, dishId: number) {
   return result.rows.length > 0;
 }
 
-export async function createOrder(buyerId: number, dishId: number, quantity: number, totalPrice: number) {
+export async function createOrder(buyerId: number, dishId: number, quantity: number, totalPrice: number, pickupAt: string | null = null) {
   const result = await sql`
-    INSERT INTO orders (buyer_id, dish_id, quantity, total_price)
-    VALUES (${buyerId}, ${dishId}, ${quantity}, ${totalPrice})
+    INSERT INTO orders (buyer_id, dish_id, quantity, total_price, pickup_at)
+    VALUES (${buyerId}, ${dishId}, ${quantity}, ${totalPrice}, ${pickupAt})
     RETURNING *
   `;
   return result.rows[0];
@@ -418,7 +420,7 @@ export async function createOrder(buyerId: number, dishId: number, quantity: num
 export async function getOrders(buyerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
-           o.created_at, o.updated_at,
+           o.created_at, o.updated_at, o.pickup_at,
            d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url, d.price as dish_price,
            u.id as seller_id, u.name as seller_name, u.avatar as seller_avatar,
            u.photo_url as seller_photo_url,
@@ -448,7 +450,7 @@ export async function updateOrderStatus(orderId: string, status: string) {
 export async function getSellerOrders(sellerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
-           o.created_at, o.updated_at,
+           o.created_at, o.updated_at, o.pickup_at,
            d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url,
            u.name as buyer_name, u.avatar as buyer_avatar, u.photo_url as buyer_photo_url
     FROM orders o
@@ -506,7 +508,7 @@ export async function clearCart(buyerId: number) {
   return { success: true };
 }
 
-export async function checkoutCart(buyerId: number, tipAmount: number, serviceFee: number) {
+export async function checkoutCart(buyerId: number, tipAmount: number, serviceFee: number, pickupAt: string | null = null) {
   const items = await getCart(buyerId);
   if (items.length === 0) return { orders: [], total: 0 };
   const orders = [];
@@ -516,8 +518,8 @@ export async function checkoutCart(buyerId: number, tipAmount: number, serviceFe
     total += linePrice;
     const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt})
       RETURNING *
     `;
     orders.push(order.rows[0]);

@@ -1,84 +1,68 @@
-# Plates — Kitchen profile fixes
+# Plates — Pickup time picker (15 min → 2 hr)
 
-Fixes to the kitchen profile flow and adds "Where do you cook?" environment selector.
+Replaced the useless ASAP/Schedule toggle with a real duration slider. Buyer picks 15-120 min, cook sees the pickup clock time on their kitchen queue.
 
 ## What changed
 
-**1. "Kitchen profile complete" text no longer misleads.**
-Before: filling in all 7 sections turned the card green and said "Kitchen profile complete · Buyers see all your details" — but if you were still pending approval, that was wrong.
+**Cart screen: new pickup time card**
+Instead of two identical-looking ASAP/Schedule buttons that did nothing, there's now a compact card with:
+- Big number showing the chosen duration ("30 minutes" or "1h 30m")
+- Small preview showing the actual clock time it converts to (e.g. "~6:47 PM")
+- A slider from 15 to 120 minutes in 15-minute steps
+- Labels at the endpoints: 15 min · 30 min · 1 hr · 2 hr
 
-After: the card shows green ONLY when both filled AND approved.
-- If not approved yet: "Kitchen details filled in · Waiting on admin approval to go live" (neutral tone, not green)
-- If approved: "Kitchen details filled in · Buyers can see your kitchen" (green)
-- If partial: "Complete your kitchen profile · X of 7 sections done"
+Default is 30 minutes (a reasonable middle ground).
 
-**2. New "Where do you cook?" section (single-select).**
-Options:
-- Home kitchen
-- Commercial kitchen
-- Community kitchen
-- Outdoor BBQ
-- Food cart
-- Food truck
+**Backend: pickup_at timestamp on orders**
+- New column `orders.pickup_at TIMESTAMP` — the actual clock time the buyer expects to pick up
+- Computed at order placement: `now + selected duration`
+- `createOrder`, `checkoutCart`, and the cart API all pass this through
 
-Only ONE can be selected — cooks don't cook from a home kitchen AND a food truck at the same time. Stored in a new `users.kitchen_environment` column.
+**Buyer's Order Detail: pickup time card**
+Below the status header (only shown while order is active, not for picked-up/cancelled):
+- "PICKUP TIME" header
+- Clock time (e.g. "6:47 PM")
+- Relative time: "in 32 min" — and if you're overdue, "Overdue by 5 min ago" with a yellow warning color
 
-**3. Existing kitchen flags renamed "Kitchen conditions" for clarity.**
-Still multi-select. Still contains: Pets in the home, Smokers in the home, Nut-free kitchen, Gluten-free kitchen.
+**Cook's Kitchen Queue: pickup chip on each order row**
+Chip next to the status pill:
+- "🔔 6:47 PM · in 32 min" — helps cooks pace their prep
+- Turns yellow with "overdue X min ago" if the buyer hasn't arrived by their picked time
 
-## Admin approval is already working correctly
-
-Verified: `getDishes()` filters `WHERE u.seller_status = 'approved'` — pending cooks' dishes do NOT appear on Discover. Dish creation is also blocked server-side unless approved. The approval chain is fully enforced.
-
-## How admins log in
-
-Same as regular users — via Clerk email/password or Google. The difference is what happens AFTER sign-in: if your Postgres user record has `role = 'admin'`, the shield icon appears on Discover.
-
-**To promote yourself to admin, run this SQL in Neon:**
-```sql
-UPDATE users SET role = 'admin' WHERE clerk_user_id = 'YOUR_CLERK_USER_ID';
-```
-
-To find your clerk_user_id first:
-```sql
-SELECT id, name, email, clerk_user_id FROM users ORDER BY id DESC LIMIT 5;
-```
-
-Sign out and back in after running the update. The shield icon appears on the Discover header, tap it to enter admin.
-
-## About ID + W-9 collection
-
-**I pushed back on this feature and want to explain why:**
-
-You asked to have the kitchen profile ask for a driver's license and link to a W-9 form. Both are legally sensitive and I don't recommend building this into the kitchen profile directly.
-
-**Why:**
-- **Storing ID means storing PII.** You'd take on legal obligations under GDPR, CCPA, and state privacy laws. You'd need encryption at rest, access audits, retention policies. You'd become an attractive target for identity theft attacks.
-- **W-9s are Stripe's job.** W-9s are the US tax form platforms collect from contractors so they can issue 1099-NECs at year-end for payouts. When we build Stripe Connect Express (the next Tier-1 feature), cooks will complete their W-9 as part of Stripe's onboarding, Stripe stores it, and Stripe automatically generates their 1099s. Duplicating that work in your own system means doing it worse than Stripe would.
-- **Duplication of KYC.** Stripe Connect requires government ID upload as part of their Know Your Customer process. Collecting IDs before Stripe means collecting them twice.
-
-**My recommendation:** wait until we build payments (next tier-1 feature) and do all identity + tax collection through Stripe. When a cook is approved by an admin, they then complete Stripe onboarding, which handles ID verification and W-9 in one flow, hosted and secured by Stripe.
-
-If you disagree and still want to collect ID/W-9 directly, we can do it, but I'd want to do it after we've talked through the storage requirements (dedicated encrypted table, no base64 in Postgres, admin-only access with audit logs, retention policy of 7 years for tax purposes).
+**The old ASAP/Schedule toggle is completely removed.**
+The `pickupTiming` state variable is gone. Replaced by `pickupDurationMin` (a number, default 30).
 
 ## Files
 
-- `lib/db.ts` — new `kitchen_environment` column + updateCookProfile accepts it
-- `app/api/users/route.ts` — pass kitchenEnvironment through
-- `app/page.tsx` — new "Where do you cook?" section, softened completion card wording
+- `lib/db.ts` — pickup_at column added; createOrder + checkoutCart accept it; getOrders + getSellerOrders SELECT it
+- `app/api/cart/route.ts` — passes pickupAt through to checkoutCart
+- `app/page.tsx` — replaces toggle with slider, adds formatPickupAt helper, displays on order detail and kitchen queue
 
 ## Install
 
 1. Extract this zip.
 2. Copy files into your local repo, overwriting.
-3. Commit: `Fix kitchen profile wording + add kitchen environment selector`
+3. Commit: `Replace pickup toggle with 15-120 min duration slider`
 4. Push origin — Vercel auto-deploys.
-5. To make yourself admin: run the SQL above in Neon SQL Editor.
+
+Migration runs automatically on next app load. Existing orders will have `pickup_at = NULL`, which is fine — they just won't show the pickup card.
 
 ## What to test
 
-1. Sign in. Go to Cook → Kitchen profile.
-2. Scroll to "Where do you cook?" — pick one. Tap same one again to unselect.
-3. Save. Go back to Kitchen. If you're pending, the completion card should NOT be green.
-4. Admin approves you (via `plates-g9u9.vercel.app` on your admin browser).
-5. Refresh — completion card is now green with "Buyers can see your kitchen".
+**As buyer:**
+1. Add something to cart. Cart screen shows the new pickup slider.
+2. Default is 30 minutes. Big number reads "30 minutes". Small text shows a clock time 30 min from now.
+3. Drag slider to 90. Shows "1h 30m" and updated clock time.
+4. Tap Place order.
+5. Open Order Detail → sees a "PICKUP TIME" card with the clock time and "in ~90 min".
+
+**As cook:**
+6. Open kitchen queue. On that new order, see a terracotta chip "🔔 8:17 PM · in 89 min" next to the status.
+7. Wait until the pickup time passes — the chip turns yellow and shows "overdue X min ago".
+
+## Design decisions
+
+- **Timestamp not duration**: stored as an actual clock time so cooks see when to be ready without doing math. Also survives if you look at the order 12 hours later.
+- **15-minute steps**: matches how humans think about time. 27 minutes isn't a useful precision.
+- **No "ASAP"**: 15 minutes IS ASAP for home-cooked food. If a cook is at their station with a hot pan, 15 min is realistic. Anything faster is unrealistic anyway.
+- **Overdue is visual, not blocking**: we don't cancel or block anything if the buyer is late. Real life has traffic. Cook sees the flag and can act accordingly.

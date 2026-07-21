@@ -115,6 +115,7 @@ interface BuyerOrder {
   pickup_code: string | null;
   created_at: string;
   updated_at: string;
+  pickup_at: string | null;
   dish_name: string;
   dish_emoji: string;
   dish_photo_url: string | null;
@@ -141,6 +142,7 @@ interface CookOrder {
   pickup_code: string | null;
   created_at: string;
   updated_at: string;
+  pickup_at: string | null;
   dish_name: string;
   dish_emoji: string;
   dish_photo_url: string | null;
@@ -328,7 +330,7 @@ export default function Home() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [tipAmount, setTipAmount] = useState(3);
   const [tipEditing, setTipEditing] = useState(false);
-  const [pickupTiming, setPickupTiming] = useState<'asap' | 'schedule'>('asap');
+  const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
   const [toast, setToast] = useState<string | null>(null);
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
   const [showingDirections, setShowingDirections] = useState(false);
@@ -1242,6 +1244,8 @@ export default function Home() {
   const placeOrder = async () => {
     if (!user || cart.length === 0) return;
     try {
+      // Compute the pickup timestamp from the duration slider
+      const pickupAtIso = new Date(Date.now() + pickupDurationMin * 60_000).toISOString();
       const res = await fetch('/api/cart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1250,6 +1254,7 @@ export default function Home() {
           buyerId: user.id,
           tipAmount,
           serviceFee,
+          pickupAt: pickupAtIso,
         }),
       });
       await res.json();
@@ -1934,6 +1939,26 @@ export default function Home() {
     if (hrs < 24) return `${hrs}h ago`;
     const days = Math.round(hrs / 24);
     return `${days}d ago`;
+  };
+
+  // Format a pickup timestamp as "6:47 PM · in 32 min" or "6:47 PM · overdue by 5 min"
+  const formatPickupAt = (iso: string | null): { clock: string; relative: string; overdue: boolean } | null => {
+    if (!iso) return null;
+    const t = new Date(iso);
+    const hh = t.getHours();
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ampm = hh >= 12 ? 'PM' : 'AM';
+    const displayH = hh % 12 === 0 ? 12 : hh % 12;
+    const clock = `${displayH}:${mm} ${ampm}`;
+    const diffMin = Math.round((t.getTime() - Date.now()) / 60000);
+    if (diffMin > 0) {
+      const relative = diffMin < 60 ? `in ${diffMin} min` : `in ${Math.floor(diffMin / 60)}h ${diffMin % 60}m`;
+      return { clock, relative, overdue: false };
+    }
+    if (diffMin === 0) return { clock, relative: 'now', overdue: false };
+    const late = Math.abs(diffMin);
+    const relative = late < 60 ? `${late} min ago` : `${Math.floor(late / 60)}h ${late % 60}m ago`;
+    return { clock, relative, overdue: true };
   };
 
   return (
@@ -2735,14 +2760,41 @@ export default function Home() {
                 )}
 
                 <div style={{ padding: '18px 22px 0' }}>
-                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>Ready by</div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => setPickupTiming('asap')} style={{ flex: 1, background: pickupTiming === 'asap' ? C.terracotta : C.card, color: pickupTiming === 'asap' ? '#fff' : C.inkSoft, borderRadius: 11, padding: 10, font: `500 12px ${font.sans}`, boxShadow: pickupTiming === 'asap' ? 'none' : '0 2px 8px rgba(60,40,20,.05)' }}>
-                      ASAP · ~25 min
-                    </button>
-                    <button onClick={() => setPickupTiming('schedule')} style={{ flex: 1, background: pickupTiming === 'schedule' ? C.terracotta : C.card, color: pickupTiming === 'schedule' ? '#fff' : C.inkSoft, borderRadius: 11, padding: 10, font: `500 12px ${font.sans}`, boxShadow: pickupTiming === 'schedule' ? 'none' : '0 2px 8px rgba(60,40,20,.05)' }}>
-                      Schedule
-                    </button>
+                  <div style={{ background: C.card, borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft }}>Pick up in</div>
+                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted }}>
+                        {(() => {
+                          const t = new Date(Date.now() + pickupDurationMin * 60_000);
+                          const hh = t.getHours();
+                          const mm = String(t.getMinutes()).padStart(2, '0');
+                          const ampm = hh >= 12 ? 'PM' : 'AM';
+                          const displayH = hh % 12 === 0 ? 12 : hh % 12;
+                          return `~${displayH}:${mm} ${ampm}`;
+                        })()}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 10 }}>
+                      <div style={{ font: `600 32px ${font.serif}`, color: C.terracotta, lineHeight: 1 }}>
+                        {pickupDurationMin < 60 ? pickupDurationMin : `${Math.floor(pickupDurationMin / 60)}h${pickupDurationMin % 60 ? ' ' + (pickupDurationMin % 60) + 'm' : ''}`}
+                      </div>
+                      {pickupDurationMin < 60 && <div style={{ font: `500 14px ${font.sans}`, color: C.muted }}>minutes</div>}
+                    </div>
+                    <input
+                      type="range"
+                      min={15}
+                      max={120}
+                      step={15}
+                      value={pickupDurationMin}
+                      onChange={(e) => setPickupDurationMin(parseInt(e.target.value))}
+                      style={{ width: '100%', accentColor: C.terracotta }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, font: `400 10.5px ${font.sans}`, color: C.muted }}>
+                      <span>15 min</span>
+                      <span>30 min</span>
+                      <span>1 hr</span>
+                      <span>2 hr</span>
+                    </div>
                   </div>
                 </div>
 
@@ -3365,6 +3417,28 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* Pickup time */}
+              {o.pickup_at && !isCancelled && o.status !== 'picked_up' && (() => {
+                const p = formatPickupAt(o.pickup_at);
+                if (!p) return null;
+                return (
+                  <div style={{ padding: '12px 22px 0' }}>
+                    <div style={{ background: p.overdue ? '#fff9e6' : C.card, border: p.overdue ? `1px solid #f0d67a` : 'none', borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: p.overdue ? '#b8860b' : C.terracottaLight, color: p.overdue ? '#fff' : C.terracotta, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                        <Bell size={18} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ font: `500 12px ${font.sans}`, color: p.overdue ? '#7a5c0b' : C.muted, textTransform: 'uppercase', letterSpacing: '.05em' }}>Pickup time</div>
+                        <div style={{ font: `500 17px ${font.serif}`, color: C.ink, marginTop: 2 }}>{p.clock}</div>
+                        <div style={{ font: `400 12px ${font.sans}`, color: p.overdue ? '#8a2a2a' : C.muted, marginTop: 2 }}>
+                          {p.overdue ? `Overdue by ${p.relative}` : p.relative}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Pickup code, once ready */}
               {o.status === 'ready' && o.pickup_code && (
                 <div style={{ padding: '14px 22px 0' }}>
@@ -3501,9 +3575,21 @@ export default function Home() {
                           <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 3 }}>
                             for {o.buyer_name} · {timeAgo(o.created_at)}
                           </div>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 8, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status] + '22', color: statusColors[o.status], font: `500 11px ${font.sans}` }}>
-                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColors[o.status] }} />
-                            {statusLabels[o.status]}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status] + '22', color: statusColors[o.status], font: `500 11px ${font.sans}` }}>
+                              <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColors[o.status] }} />
+                              {statusLabels[o.status]}
+                            </div>
+                            {o.pickup_at && !isDone && (() => {
+                              const p = formatPickupAt(o.pickup_at);
+                              if (!p) return null;
+                              return (
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 8, background: p.overdue ? '#fff9e6' : C.terracottaLight, color: p.overdue ? '#7a5c0b' : C.terracotta, font: `500 11px ${font.sans}` }}>
+                                  <Bell size={11} />
+                                  {p.clock} · {p.overdue ? `overdue ${p.relative}` : p.relative}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
