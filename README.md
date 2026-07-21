@@ -1,32 +1,47 @@
-# Plates — Maps v2 update
+# Plates — Cook profile update
+
+Adds a full "Kitchen profile" section to the cook side of the app, matching the design mockup's cook onboarding fields.
 
 ## What changed
 
-**In-app directions.** The "Show directions" button now draws the route from your location to the seller directly on the pickup map, and shows the driving distance + duration in a green banner. No more opening a new browser tab.
+**Seller Dashboard**
+- New "Kitchen profile" card at the top with a completeness progress bar
+- Tap it to open the full profile editor
 
-**Photo pins on the Discover map.** Each cook pin now shows a circular photo of the dish (with a terracotta ring and price badge). Dishes without a photo fall back to their emoji on the striped placeholder pattern.
+**Cook profile screen (new)**
+- Legal name + display kitchen name
+- Cottage-food law attestation checkbox
+- Food handler permit yes/no + optional number
+- Kitchen environment flags (pets, smokers, nut-free, gluten-free)
+- Typical cooking hours
+- Pickup spot description
 
-## Files
+**Meal Detail (buyer side)**
+- Seller card now shows kitchen environment flags as tags
+- Cooking hours appear under the seller name
+- Pickup description shows in a subtle card below
 
-Only 2 files change:
+Everything is opt-in — nothing is gated. Cooks can post dishes without touching this. Buyers see whatever's filled in.
 
-- `components/MapView.tsx` **REPLACE** — new photo-pin rendering + directions overlay
-- `app/page.tsx` **REPLACE** — new directions toggle, hooks up trip info banner
+## Files (3 replacements, no new files)
+
+- `lib/db.ts` — adds 8 new user columns + `updateCookProfile` function
+- `app/api/users/route.ts` — adds `updateCookProfile` action
+- `app/page.tsx` — adds cook-profile screen, updates seller dashboard and meal detail
 
 ## How to install
 
 1. Extract this zip.
-2. Copy each file into your local `Plates` repo at the matching path (both are replacements — no new folders).
-3. GitHub Desktop should show 2 changed files.
-4. Commit: `In-app directions + dish photo pins on map`
+2. Copy each file into your local Plates repo at the matching path — all three overwrite existing files.
+3. GitHub Desktop should show 3 changed files.
+4. Commit: `Add kitchen profile: legal, permits, environment flags, hours, pickup details`
 5. Push origin — Vercel auto-deploys.
 
 ## What to test after deploy
 
-- **Discover → Map tab**: pins now show the dish photo (or emoji) in a circular frame with the price beneath. Tap a pin → opens the meal.
-- **Meal detail → Show directions**: the route draws on the map in terracotta, and a green banner appears showing "X min · Y mi by car". Tap again to hide.
-
-## Notes
-
-- Photo pins convert your dish photos to canvas data URIs so they can be embedded in the map marker. If a photo fails to load, the pin falls back to the emoji automatically.
-- Directions currently show DRIVING mode. If you want walking/biking added as options, tell me.
+1. Toggle Seller mode ON if it isn't already.
+2. Go to Cook tab (bottom nav).
+3. Tap the new "Complete your kitchen profile" card at the top.
+4. Fill in the fields, tap Save profile.
+5. Come back to Cook — card should now say "Kitchen profile complete" in green.
+6. Add a dish, then view it in Discover, open it. You should see your cooking hours, environment flag tags, and pickup description on the meal detail.

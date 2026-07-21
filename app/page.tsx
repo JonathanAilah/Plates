@@ -13,6 +13,9 @@ interface Dish {
   seller_photo_url: string | null;
   seller_latitude: number | null;
   seller_longitude: number | null;
+  seller_kitchen_flags: string | null;
+  seller_pickup_description: string | null;
+  seller_cooking_hours: string | null;
   emoji: string;
   photo_url: string | null;
   price: number;
@@ -61,6 +64,14 @@ interface User {
   latitude: number | null;
   longitude: number | null;
   prep_address: string | null;
+  legal_name: string | null;
+  kitchen_name: string | null;
+  cottage_food_attested: boolean;
+  has_permit: boolean | null;
+  permit_number: string | null;
+  kitchen_flags: string | null;
+  cooking_hours: string | null;
+  pickup_description: string | null;
 }
 
 function distanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -135,7 +146,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'notifications'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -159,6 +170,20 @@ export default function Home() {
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
   const [showingDirections, setShowingDirections] = useState(false);
   const [tripInfo, setTripInfo] = useState<{ distanceText: string; durationText: string } | null>(null);
+
+  // Cook profile form state
+  const [cpLegalName, setCpLegalName] = useState('');
+  const [cpKitchenName, setCpKitchenName] = useState('');
+  const [cpCottage, setCpCottage] = useState(false);
+  const [cpHasPermit, setCpHasPermit] = useState<boolean | null>(null);
+  const [cpPermitNumber, setCpPermitNumber] = useState('');
+  const [cpFlagPets, setCpFlagPets] = useState(false);
+  const [cpFlagSmokers, setCpFlagSmokers] = useState(false);
+  const [cpFlagNutFree, setCpFlagNutFree] = useState(false);
+  const [cpFlagGlutenFree, setCpFlagGlutenFree] = useState(false);
+  const [cpCookingHours, setCpCookingHours] = useState('');
+  const [cpPickupDesc, setCpPickupDesc] = useState('');
+  const [cpSaving, setCpSaving] = useState(false);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -528,6 +553,61 @@ export default function Home() {
     }
   };
 
+  const openCookProfile = () => {
+    if (!user) return;
+    // Prefill form from existing user data
+    setCpLegalName(user.legal_name || '');
+    setCpKitchenName(user.kitchen_name || '');
+    setCpCottage(!!user.cottage_food_attested);
+    setCpHasPermit(user.has_permit);
+    setCpPermitNumber(user.permit_number || '');
+    setCpCookingHours(user.cooking_hours || '');
+    setCpPickupDesc(user.pickup_description || '');
+    const flags = (user.kitchen_flags || '').split(',').map(s => s.trim());
+    setCpFlagPets(flags.includes('pets'));
+    setCpFlagSmokers(flags.includes('smokers'));
+    setCpFlagNutFree(flags.includes('nut-free'));
+    setCpFlagGlutenFree(flags.includes('gluten-free'));
+    setScreen('cook-profile');
+  };
+
+  const saveCookProfile = async () => {
+    if (!user) return;
+    setCpSaving(true);
+    try {
+      const flags = [
+        cpFlagPets && 'pets',
+        cpFlagSmokers && 'smokers',
+        cpFlagNutFree && 'nut-free',
+        cpFlagGlutenFree && 'gluten-free',
+      ].filter(Boolean).join(',');
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'updateCookProfile',
+          id: user.id,
+          legalName: cpLegalName || null,
+          kitchenName: cpKitchenName || null,
+          cottageFoodAttested: cpCottage,
+          hasPermit: cpHasPermit,
+          permitNumber: cpPermitNumber || null,
+          kitchenFlags: flags || null,
+          cookingHours: cpCookingHours || null,
+          pickupDescription: cpPickupDesc || null,
+        }),
+      });
+      const updated = await res.json();
+      setUser(updated);
+      showToast('Kitchen profile saved');
+      setScreen('seller-dashboard');
+    } catch (error) {
+      console.error('Save cook profile error:', error);
+    } finally {
+      setCpSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.page, color: C.muted }}>
@@ -771,9 +851,25 @@ export default function Home() {
                   )}
                   <div style={{ flex: 1 }}>
                     <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{selectedDish.seller_name}</div>
-                    <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>Home cook</div>
+                    <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                      {selectedDish.seller_cooking_hours || 'Home cook'}
+                    </div>
                   </div>
                 </div>
+                {selectedDish.seller_kitchen_flags && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+                    {selectedDish.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).map(flag => (
+                      <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
+                        {flag.charAt(0).toUpperCase() + flag.slice(1).replace('-', ' ')}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {selectedDish.seller_pickup_description && (
+                  <div style={{ marginTop: 12, padding: '10px 12px', background: C.surface, borderRadius: 10, font: `400 12.5px ${font.sans}`, color: C.inkSoft }}>
+                    <span style={{ color: C.muted }}>Pickup: </span>{selectedDish.seller_pickup_description}
+                  </div>
+                )}
               </div>
 
               {selectedDish.seller_latitude != null && selectedDish.seller_longitude != null && (
@@ -1073,6 +1169,37 @@ export default function Home() {
               <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Your kitchen</div>
             </div>
 
+            {(() => {
+              const filled = [
+                user.legal_name, user.kitchen_name, user.cottage_food_attested,
+                user.has_permit != null, user.kitchen_flags, user.cooking_hours, user.pickup_description,
+              ].filter(Boolean).length;
+              const total = 7;
+              const pct = Math.round((filled / total) * 100);
+              const complete = filled === total;
+              return (
+                <div onClick={openCookProfile} style={{ cursor: 'pointer', background: complete ? C.greenLight : C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, background: complete ? C.green : C.cardAlt, color: complete ? '#fff' : C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                    <ChefHat size={20} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ font: `500 15px ${font.serif}`, color: complete ? C.green : C.ink }}>
+                      {complete ? 'Kitchen profile complete' : 'Complete your kitchen profile'}
+                    </div>
+                    <div style={{ font: `400 11.5px ${font.sans}`, color: complete ? C.green : C.muted, marginTop: 2 }}>
+                      {complete ? 'Buyers see all your details' : `${filled} of ${total} sections done · ${pct}%`}
+                    </div>
+                    {!complete && (
+                      <div style={{ marginTop: 8, height: 4, borderRadius: 2, background: C.cardAlt, overflow: 'hidden' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: C.terracotta }} />
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ color: complete ? C.green : C.terracotta, font: `500 12px ${font.sans}`, flex: 'none' }}>{complete ? 'Edit' : 'Set up ›'}</div>
+                </div>
+              );
+            })()}
+
             <div style={{ background: C.card, padding: 16, borderRadius: 14, marginBottom: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
               <p style={{ font: `400 13px ${font.sans}`, color: C.inkSoft, marginBottom: 12 }}>You're selling {myDishes.length} {myDishes.length === 1 ? 'dish' : 'dishes'}</p>
 
@@ -1170,7 +1297,88 @@ export default function Home() {
           </div>
         )}
 
-        {/* ================= BOTTOM NAV (all main screens) ================= */}
+        {/* ================= COOK PROFILE ================= */}
+        {screen === 'cook-profile' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 120px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+              <button onClick={() => setScreen('seller-dashboard')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Kitchen profile</div>
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Who you are</div>
+              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>Your legal name is kept private and used only for payouts.</div>
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>Legal full name</label>
+              <input type="text" value={cpLegalName} onChange={(e) => setCpLegalName(e.target.value)} placeholder="Marisol Vega Ramírez" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 12 }} />
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>Kitchen / display name</label>
+              <input type="text" value={cpKitchenName} onChange={(e) => setCpKitchenName(e.target.value)} placeholder="Marisol's Handmade Pupusas" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+              <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>Shown publicly on your dishes. Leave blank to use your account name.</div>
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Legal & compliance</div>
+              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>These attestations help keep buyers safe. Rules vary by city and state.</div>
+
+              <div onClick={() => setCpCottage(!cpCottage)} style={{ cursor: 'pointer', display: 'flex', gap: 12, alignItems: 'flex-start', padding: 12, background: C.surface, borderRadius: 12, marginBottom: 10 }}>
+                <div style={{ width: 22, height: 22, borderRadius: 6, background: cpCottage ? C.green : '#fff', border: `2px solid ${cpCottage ? C.green : C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', color: '#fff', font: `700 13px ${font.sans}` }}>
+                  {cpCottage ? '✓' : ''}
+                </div>
+                <div style={{ font: `500 13px/1.5 ${font.sans}`, color: C.ink }}>
+                  I understand and comply with my local <b>cottage food / home kitchen laws</b>, and I am legally allowed to sell homemade food.
+                </div>
+              </div>
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 8, marginTop: 6 }}>Do you have a food handler's permit?</label>
+              <div style={{ display: 'flex', gap: 8, marginBottom: cpHasPermit ? 12 : 0 }}>
+                <button onClick={() => setCpHasPermit(true)} style={{ flex: 1, padding: 10, background: cpHasPermit === true ? C.terracotta : C.card, color: cpHasPermit === true ? '#fff' : C.inkSoft, border: `1px solid ${cpHasPermit === true ? C.terracotta : C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}` }}>Yes</button>
+                <button onClick={() => { setCpHasPermit(false); setCpPermitNumber(''); }} style={{ flex: 1, padding: 10, background: cpHasPermit === false ? C.terracotta : C.card, color: cpHasPermit === false ? '#fff' : C.inkSoft, border: `1px solid ${cpHasPermit === false ? C.terracotta : C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}` }}>No</button>
+              </div>
+              {cpHasPermit === true && (
+                <input type="text" value={cpPermitNumber} onChange={(e) => setCpPermitNumber(e.target.value)} placeholder="Permit / certificate number (optional)" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+              )}
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Kitchen environment</div>
+              <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 14 }}>Shown to buyers on your dishes so they can decide what's right for them.</div>
+
+              {[
+                { key: 'pets', label: 'Pets in the home', state: cpFlagPets, set: setCpFlagPets },
+                { key: 'smokers', label: 'Smokers in the home', state: cpFlagSmokers, set: setCpFlagSmokers },
+                { key: 'nut-free', label: 'Nut-free kitchen', state: cpFlagNutFree, set: setCpFlagNutFree },
+                { key: 'gluten-free', label: 'Gluten-free kitchen', state: cpFlagGlutenFree, set: setCpFlagGlutenFree },
+              ].map(f => (
+                <div key={f.key} onClick={() => f.set(!f.state)} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, padding: 12, background: C.surface, borderRadius: 10, marginBottom: 8 }}>
+                  <div style={{ width: 22, height: 22, borderRadius: 6, background: f.state ? C.green : '#fff', border: `2px solid ${f.state ? C.green : C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', color: '#fff', font: `700 13px ${font.sans}` }}>
+                    {f.state ? '✓' : ''}
+                  </div>
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>{f.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 14 }}>Pickup details</div>
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>Typical cooking hours</label>
+              <input type="text" value={cpCookingHours} onChange={(e) => setCpCookingHours(e.target.value)} placeholder="Weekdays 11am–7pm" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 12 }} />
+
+              <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>Pickup spot description</label>
+              <input type="text" value={cpPickupDesc} onChange={(e) => setCpPickupDesc(e.target.value)} placeholder="Front porch, blue door" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+              <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>Helps buyers find you.</div>
+            </div>
+
+            <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, padding: '14px 22px 20px', maxWidth: 430, margin: '0 auto', boxShadow: '0 -6px 20px rgba(60,40,20,.07)' }}>
+              <button onClick={saveCookProfile} disabled={cpSaving} style={{ width: '100%', background: C.terracotta, color: '#fff', borderRadius: 13, padding: 14, font: `500 14px ${font.sans}`, opacity: cpSaving ? .7 : 1 }}>
+                {cpSaving ? 'Saving…' : 'Save profile'}
+              </button>
+            </div>
+          </div>
+        )}
         {(screen === 'feed' || screen === 'cart') && (
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0 14px', maxWidth: 430, margin: '0 auto' }}>
             <button onClick={() => setScreen('feed')} style={{ textAlign: 'center', color: screen === 'feed' ? C.terracotta : C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>

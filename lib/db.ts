@@ -21,6 +21,14 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS prep_address TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS legal_name TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_name TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS cottage_food_attested BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS has_permit BOOLEAN`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS permit_number TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_flags TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_hours TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_description TEXT`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dishes (
@@ -124,6 +132,31 @@ export async function updateUserAddress(id: number, address: string, latitude: n
   return result.rows[0];
 }
 
+export async function updateCookProfile(id: number, data: {
+  legalName?: string | null;
+  kitchenName?: string | null;
+  cottageFoodAttested?: boolean;
+  hasPermit?: boolean | null;
+  permitNumber?: string | null;
+  kitchenFlags?: string | null;
+  cookingHours?: string | null;
+  pickupDescription?: string | null;
+}) {
+  const result = await sql`
+    UPDATE users SET
+      legal_name = COALESCE(${data.legalName ?? null}, legal_name),
+      kitchen_name = COALESCE(${data.kitchenName ?? null}, kitchen_name),
+      cottage_food_attested = COALESCE(${data.cottageFoodAttested ?? null}, cottage_food_attested),
+      has_permit = COALESCE(${data.hasPermit ?? null}, has_permit),
+      permit_number = COALESCE(${data.permitNumber ?? null}, permit_number),
+      kitchen_flags = COALESCE(${data.kitchenFlags ?? null}, kitchen_flags),
+      cooking_hours = COALESCE(${data.cookingHours ?? null}, cooking_hours),
+      pickup_description = COALESCE(${data.pickupDescription ?? null}, pickup_description)
+    WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
+}
+
 export async function updateUserProfile(id: number, name: string, bio: string, photoUrl: string | null) {
   const result = await sql`
     UPDATE users SET name = ${name}, bio = ${bio}, photo_url = ${photoUrl} WHERE id = ${id} RETURNING *
@@ -143,7 +176,10 @@ export async function createDish(sellerId: number, name: string, description: st
 export async function getDishes() {
   const result = await sql`
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
-           u.latitude as seller_latitude, u.longitude as seller_longitude
+           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           u.kitchen_flags as seller_kitchen_flags,
+           u.pickup_description as seller_pickup_description,
+           u.cooking_hours as seller_cooking_hours
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
     ORDER BY d.created_at DESC

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createUser, getUser, updateUserSeller, updateUserLocation, updateUserAddress, updateUserProfile, initializeDatabase } from '@/lib/db';
+import { createUser, getUser, updateUserSeller, updateUserLocation, updateUserAddress, updateUserProfile, updateCookProfile, initializeDatabase } from '@/lib/db';
 
 export async function POST(request: NextRequest) {
   try {
-    const { action, name, email, avatar, id, isSeller, latitude, longitude, bio, photoUrl, address } = await request.json();
+    const body = await request.json();
+    const { action, name, email, avatar, id, isSeller, latitude, longitude, bio, photoUrl, address } = body;
 
     if (action === 'create') {
       const user = await createUser(name, email, avatar);
@@ -32,6 +33,20 @@ export async function POST(request: NextRequest) {
 
     if (action === 'updateProfile') {
       const user = await updateUserProfile(id, name, bio, photoUrl ?? null);
+      return NextResponse.json(user);
+    }
+
+    if (action === 'updateCookProfile') {
+      const user = await updateCookProfile(id, {
+        legalName: body.legalName,
+        kitchenName: body.kitchenName,
+        cottageFoodAttested: body.cottageFoodAttested,
+        hasPermit: body.hasPermit,
+        permitNumber: body.permitNumber,
+        kitchenFlags: body.kitchenFlags,
+        cookingHours: body.cookingHours,
+        pickupDescription: body.pickupDescription,
+      });
       return NextResponse.json(user);
     }
 
