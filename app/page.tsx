@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
@@ -98,6 +98,48 @@ interface Message {
   sender_photo_url: string | null;
 }
 
+interface AdminStats {
+  pending: number;
+  sellers: number;
+  suspended: number;
+  admins: number;
+  totalUsers: number;
+  totalDishes: number;
+  totalOrders: number;
+  orphanDishes: number;
+}
+
+interface AdminUserRow {
+  id: number;
+  name: string;
+  email: string;
+  avatar: string;
+  photo_url: string | null;
+  role: 'user' | 'admin';
+  seller_status: string;
+  account_disabled: boolean;
+  kitchen_name: string | null;
+  created_at: string;
+}
+
+interface AdminUserDetail {
+  user: any;
+  stats: { dishes: number; ordersAsBuyer: number; ordersAsSeller: number };
+}
+
+interface AdminDishRow {
+  id: number;
+  name: string;
+  emoji: string;
+  photo_url: string | null;
+  price: string;
+  likes: number;
+  created_at: string;
+  seller_id: number;
+  seller_name: string;
+  seller_status: string;
+}
+
 interface Notification {
   id: number;
   type: 'payment' | 'ready';
@@ -122,6 +164,11 @@ interface User {
   kitchen_flags: string | null;
   cooking_hours: string | null;
   pickup_description: string | null;
+  role: 'user' | 'admin';
+  seller_status: 'not_seller' | 'pending' | 'approved' | 'rejected' | 'suspended';
+  rejection_reason: string | null;
+  suspended_reason: string | null;
+  account_disabled: boolean;
 }
 
 function distanceMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -196,7 +243,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [orders, setOrders] = useState<BuyerOrder[]>([]);
@@ -253,6 +300,22 @@ export default function Home() {
   const [pickupCodeError, setPickupCodeError] = useState(false);
   const [pickupCodeSubmitting, setPickupCodeSubmitting] = useState(false);
   const pickupInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // Admin state
+  const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
+  const [adminPending, setAdminPending] = useState<any[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
+  const [adminUserFilter, setAdminUserFilter] = useState<'all' | 'pending' | 'sellers' | 'suspended' | 'admins' | 'disabled'>('all');
+  const [adminUserSearch, setAdminUserSearch] = useState('');
+  const [adminSelectedUser, setAdminSelectedUser] = useState<AdminUserDetail | null>(null);
+  const [adminSelectedUserOrders, setAdminSelectedUserOrders] = useState<any[]>([]);
+  const [adminDishes, setAdminDishes] = useState<AdminDishRow[]>([]);
+  const [adminDishSearch, setAdminDishSearch] = useState('');
+  const [adminActionSubmitting, setAdminActionSubmitting] = useState(false);
+  const [adminRejectReason, setAdminRejectReason] = useState('');
+  const [adminSuspendReason, setAdminSuspendReason] = useState('');
+  const [adminShowRejectFor, setAdminShowRejectFor] = useState<number | null>(null);
+  const [adminShowSuspendFor, setAdminShowSuspendFor] = useState<number | null>(null);
 
   const dishFileInputRef = useRef<HTMLInputElement>(null);
   const profileFileInputRef = useRef<HTMLInputElement>(null);
@@ -318,6 +381,187 @@ export default function Home() {
       }
     } catch (e) {
       console.error('Unread counts error:', e);
+    }
+  };
+
+  // ============ ADMIN LOADERS ============
+
+  const loadAdminStats = async () => {
+    try {
+      const res = await fetch('/api/admin?action=stats');
+      if (res.ok) {
+        const data = await res.json();
+        setAdminStats(data);
+      }
+    } catch (e) { console.error('Admin stats error:', e); }
+  };
+
+  const loadAdminPending = async () => {
+    try {
+      const res = await fetch('/api/admin?action=pending');
+      if (res.ok) {
+        const data = await res.json();
+        setAdminPending(Array.isArray(data) ? data : []);
+      }
+    } catch (e) { console.error('Admin pending error:', e); }
+  };
+
+  const loadAdminUsers = async () => {
+    try {
+      const params = new URLSearchParams({ action: 'users', filter: adminUserFilter });
+      if (adminUserSearch.trim()) params.set('search', adminUserSearch.trim());
+      const res = await fetch(`/api/admin?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAdminUsers(Array.isArray(data) ? data : []);
+      }
+    } catch (e) { console.error('Admin users error:', e); }
+  };
+
+  const loadAdminUserDetail = async (userId: number) => {
+    try {
+      const [detailRes, ordersRes] = await Promise.all([
+        fetch(`/api/admin?action=userDetail&userId=${userId}`),
+        fetch(`/api/admin?action=userOrders&userId=${userId}`),
+      ]);
+      if (detailRes.ok) {
+        const detail = await detailRes.json();
+        setAdminSelectedUser(detail);
+      }
+      if (ordersRes.ok) {
+        const orders = await ordersRes.json();
+        setAdminSelectedUserOrders(Array.isArray(orders) ? orders : []);
+      }
+      setScreen('admin-user-detail');
+    } catch (e) { console.error('Admin user detail error:', e); }
+  };
+
+  const loadAdminDishes = async () => {
+    try {
+      const params = new URLSearchParams({ action: 'dishes' });
+      if (adminDishSearch.trim()) params.set('search', adminDishSearch.trim());
+      const res = await fetch(`/api/admin?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAdminDishes(Array.isArray(data) ? data : []);
+      }
+    } catch (e) { console.error('Admin dishes error:', e); }
+  };
+
+  const adminAction = async (payload: Record<string, any>): Promise<any | null> => {
+    setAdminActionSubmitting(true);
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Action failed');
+        return null;
+      }
+      return data;
+    } catch (e) {
+      console.error('Admin action error:', e);
+      showToast('Network error');
+      return null;
+    } finally {
+      setAdminActionSubmitting(false);
+    }
+  };
+
+  const adminApproveSeller = async (userId: number) => {
+    const result = await adminAction({ action: 'approveSeller', userId });
+    if (result) {
+      showToast('Seller approved');
+      await loadAdminStats();
+      await loadAdminPending();
+      // Refresh the currently-open user detail if applicable
+      if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
+    }
+  };
+
+  const adminRejectSeller = async (userId: number, reason: string) => {
+    if (!reason.trim()) { showToast('Reason required'); return; }
+    const result = await adminAction({ action: 'rejectSeller', userId, reason });
+    if (result) {
+      showToast('Seller rejected');
+      setAdminShowRejectFor(null);
+      setAdminRejectReason('');
+      await loadAdminStats();
+      await loadAdminPending();
+      if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
+    }
+  };
+
+  const adminSuspendSeller = async (userId: number, reason: string) => {
+    if (!reason.trim()) { showToast('Reason required'); return; }
+    const result = await adminAction({ action: 'suspendSeller', userId, reason });
+    if (result) {
+      showToast('Seller suspended');
+      setAdminShowSuspendFor(null);
+      setAdminSuspendReason('');
+      await loadAdminStats();
+      if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
+    }
+  };
+
+  const adminUnsuspendSeller = async (userId: number) => {
+    const result = await adminAction({ action: 'unsuspendSeller', userId });
+    if (result) {
+      showToast('Seller reinstated');
+      if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
+    }
+  };
+
+  const adminToggleDisabled = async (userId: number, disabled: boolean) => {
+    const result = await adminAction({ action: 'setDisabled', userId, disabled });
+    if (result) {
+      showToast(disabled ? 'Account disabled' : 'Account re-enabled');
+      if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
+    }
+  };
+
+  const adminSetRole = async (userId: number, role: 'user' | 'admin') => {
+    const result = await adminAction({ action: 'setRole', userId, role });
+    if (result) {
+      showToast(role === 'admin' ? 'Promoted to admin' : 'Admin removed');
+      if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
+    }
+  };
+
+  const adminDeleteDishAction = async (dishId: number) => {
+    if (!confirm('Delete this dish permanently? This cannot be undone.')) return;
+    const result = await adminAction({ action: 'deleteDish', dishId });
+    if (result) {
+      showToast('Dish deleted');
+      setAdminDishes(prev => prev.filter(d => d.id !== dishId));
+      await loadAdminStats();
+    }
+  };
+
+  const submitForReview = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'submitForReview' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.missing?.length) {
+          showToast(`Complete: ${data.missing.join(', ')}`);
+        } else {
+          showToast(data.error || 'Could not submit');
+        }
+        return;
+      }
+      setUser(data);
+      showToast('Submitted for review — admin will review shortly');
+    } catch (e) {
+      console.error('Submit for review error:', e);
     }
   };
 
@@ -482,6 +726,28 @@ export default function Home() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  // Admin: poll pending count so a red banner appears when new sellers submit
+  useEffect(() => {
+    if (!user || user.role !== 'admin') return;
+    loadAdminStats();
+    const interval = setInterval(() => {
+      if (document.hidden) return;
+      loadAdminStats();
+    }, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
+
+  // Load specific admin data when opening admin screens
+  useEffect(() => {
+    if (!user || user.role !== 'admin') return;
+    if (screen === 'admin') loadAdminStats();
+    if (screen === 'admin-pending') loadAdminPending();
+    if (screen === 'admin-users') loadAdminUsers();
+    if (screen === 'admin-dishes') loadAdminDishes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, adminUserFilter, adminUserSearch, adminDishSearch]);
 
   // Auto-scroll to bottom of chat when new messages arrive
   useEffect(() => {
@@ -808,16 +1074,21 @@ export default function Home() {
 
   const toggleSellerMode = async () => {
     if (!user) return;
-    try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'toggleSeller', id: user.id, isSeller: !user.isSeller }),
-      });
-      const updatedUser = await res.json();
-      setUser(updatedUser);
-      if (!user.isSeller) setScreen('seller-dashboard');
-    } catch (error) { console.error(error); }
+    // If already approved and toggling OFF, go through the plain toggle path
+    if (user.seller_status === 'approved' && user.isSeller) {
+      try {
+        const res = await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'toggleSeller', isSeller: false }),
+        });
+        const updatedUser = await res.json();
+        setUser(updatedUser);
+      } catch (error) { console.error(error); }
+      return;
+    }
+    // Otherwise, entering seller mode = fill out profile then submit for review
+    setScreen('cook-profile');
   };
 
   const handleProfilePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1093,6 +1364,14 @@ export default function Home() {
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.green }} />
                     Nearby ▾
                   </div>
+                )}
+                {user.role === 'admin' && (
+                  <button onClick={() => setScreen('admin')} style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', background: (adminStats && adminStats.pending > 0) ? C.terracotta : C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: (adminStats && adminStats.pending > 0) ? '#fff' : C.inkSoft }}>
+                    <Shield size={17} />
+                    {adminStats && adminStats.pending > 0 && (
+                      <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: '#fff', color: C.terracotta, font: `700 10px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${C.terracotta}` }}>{adminStats.pending}</span>
+                    )}
+                  </button>
                 )}
                 <button onClick={() => setScreen('notifications')} style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft }}>
                   <Bell size={17} />
@@ -1615,6 +1894,80 @@ export default function Home() {
               <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Your kitchen</div>
             </div>
 
+            {user.seller_status === 'pending' && (
+              <div style={{ background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 14, padding: 14, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: '#b8860b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                  <Bell size={16} />
+                </div>
+                <div>
+                  <div style={{ font: `500 14px ${font.serif}`, color: '#7a5c0b' }}>Under review</div>
+                  <div style={{ font: `400 12.5px ${font.sans}`, color: '#7a5c0b', marginTop: 3 }}>
+                    Your kitchen is being reviewed by an admin. You can browse and edit your profile, but can&apos;t post dishes yet.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {user.seller_status === 'rejected' && (
+              <div style={{ background: '#fceded', border: '1px solid #f5b8b8', borderRadius: 14, padding: 14, marginBottom: 14 }}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 10, background: '#c94b4b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                    <XCircle size={16} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ font: `500 14px ${font.serif}`, color: '#8a2a2a' }}>Not approved</div>
+                    {user.rejection_reason && (
+                      <div style={{ font: `400 12.5px ${font.sans}`, color: '#8a2a2a', marginTop: 3 }}>
+                        Reason: {user.rejection_reason}
+                      </div>
+                    )}
+                    <div style={{ font: `400 12px ${font.sans}`, color: '#8a2a2a', marginTop: 6 }}>
+                      Update your profile and resubmit for review.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={submitForReview}
+                  style={{ marginTop: 12, width: '100%', background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12.5px ${font.sans}` }}
+                >
+                  Resubmit for review
+                </button>
+              </div>
+            )}
+
+            {user.seller_status === 'suspended' && (
+              <div style={{ background: '#fceded', border: '1px solid #f5b8b8', borderRadius: 14, padding: 14, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: '#c94b4b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                  <Pause size={16} />
+                </div>
+                <div>
+                  <div style={{ font: `500 14px ${font.serif}`, color: '#8a2a2a' }}>Account suspended</div>
+                  {user.suspended_reason && (
+                    <div style={{ font: `400 12.5px ${font.sans}`, color: '#8a2a2a', marginTop: 3 }}>
+                      Reason: {user.suspended_reason}
+                    </div>
+                  )}
+                  <div style={{ font: `400 12px ${font.sans}`, color: '#8a2a2a', marginTop: 6 }}>
+                    Your dishes are hidden from buyers. Contact support if you think this is a mistake.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {user.seller_status === 'not_seller' && (
+              <div style={{ background: C.card, border: `1px solid ${C.cardAlt}`, borderRadius: 14, padding: 14, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: C.cardAlt, color: C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                  <ChefHat size={16} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Fill your kitchen profile</div>
+                  <div style={{ font: `400 12.5px ${font.sans}`, color: C.muted, marginTop: 3 }}>
+                    Add your legal name, address, cottage-food attestation, and permit info. Then submit for review.
+                  </div>
+                </div>
+              </div>
+            )}
+
             {(() => {
               const filled = [
                 user.legal_name, user.kitchen_name, user.cottage_food_attested,
@@ -1694,39 +2047,54 @@ export default function Home() {
               )}
             </div>
 
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>What are you cooking today?</div>
-              <input type="text" id="dishName" placeholder="e.g., Homemade Pasta" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+            {user.seller_status === 'approved' ? (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>What are you cooking today?</div>
+                <input type="text" id="dishName" placeholder="e.g., Homemade Pasta" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
 
-              <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Price ($)</div>
-              <input type="number" id="dishPrice" placeholder="e.g., 12" min="0" step="0.01" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Price ($)</div>
+                <input type="number" id="dishPrice" placeholder="e.g., 12" min="0" step="0.01" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
 
-              <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Photo (optional)</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                <div onClick={() => dishFileInputRef.current?.click()} style={{ width: 64, height: 64, borderRadius: 10, background: C.cardAlt, border: `1px dashed ${C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden', flex: 'none' }}>
-                  {dishPhotoPreview ? (
-                    <img src={dishPhotoPreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  ) : (
-                    <Camera size={20} color={C.muted} />
-                  )}
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Photo (optional)</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <div onClick={() => dishFileInputRef.current?.click()} style={{ width: 64, height: 64, borderRadius: 10, background: C.cardAlt, border: `1px dashed ${C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden', flex: 'none' }}>
+                    {dishPhotoPreview ? (
+                      <img src={dishPhotoPreview} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                      <Camera size={20} color={C.muted} />
+                    )}
+                  </div>
+                  <input ref={dishFileInputRef} type="file" accept="image/*" onChange={handleDishPhotoChange} style={{ display: 'none' }} />
+                  <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>{dishPhotoFile ? dishPhotoFile.name : 'Tap to add a photo'}</span>
                 </div>
-                <input ref={dishFileInputRef} type="file" accept="image/*" onChange={handleDishPhotoChange} style={{ display: 'none' }} />
-                <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>{dishPhotoFile ? dishPhotoFile.name : 'Tap to add a photo'}</span>
-              </div>
 
-              <button onClick={() => {
-                const nameInput = document.getElementById('dishName') as HTMLInputElement;
-                const priceInput = document.getElementById('dishPrice') as HTMLInputElement;
-                const priceValue = parseFloat(priceInput.value);
-                if (nameInput.value.trim() && priceValue > 0) {
-                  addDish(nameInput.value.trim(), priceValue);
-                  nameInput.value = '';
-                  priceInput.value = '';
-                }
-              }} style={{ width: '100%', padding: 12, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                <Plus size={16} /> Add to menu
-              </button>
-            </div>
+                <button onClick={() => {
+                  const nameInput = document.getElementById('dishName') as HTMLInputElement;
+                  const priceInput = document.getElementById('dishPrice') as HTMLInputElement;
+                  const priceValue = parseFloat(priceInput.value);
+                  if (nameInput.value.trim() && priceValue > 0) {
+                    addDish(nameInput.value.trim(), priceValue);
+                    nameInput.value = '';
+                    priceInput.value = '';
+                  }
+                }} style={{ width: '100%', padding: 12, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  <Plus size={16} /> Add to menu
+                </button>
+              </div>
+            ) : user.seller_status === 'not_seller' && user.legal_name && user.kitchen_name && user.cottage_food_attested && user.has_permit != null && user.prep_address ? (
+              <div style={{ background: C.greenLight, borderRadius: 14, padding: 16, marginBottom: 16, textAlign: 'center' }}>
+                <div style={{ font: `500 15px ${font.serif}`, color: C.green, marginBottom: 6 }}>Ready to submit</div>
+                <div style={{ font: `400 12.5px ${font.sans}`, color: C.green, marginBottom: 12 }}>
+                  Your kitchen profile is complete. Submit for admin review to start posting dishes.
+                </div>
+                <button
+                  onClick={submitForReview}
+                  style={{ background: C.green, color: '#fff', borderRadius: 10, padding: '10px 20px', font: `500 13px ${font.sans}` }}
+                >
+                  Submit for review
+                </button>
+              </div>
+            ) : null}
 
             {myDishes.length > 0 && (
               <div>
@@ -2335,6 +2703,491 @@ export default function Home() {
               <UserIcon size={22} />
               <span style={{ font: `500 10px ${font.sans}` }}>You</span>
             </button>
+          </div>
+        )}
+
+        {/* ================= ADMIN: DASHBOARD ================= */}
+        {screen === 'admin' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+              <button onClick={() => setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ flex: 1, font: `500 22px ${font.serif}`, color: C.ink }}>Admin</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', background: C.ink, color: '#fff', borderRadius: 12, font: `500 10px ${font.sans}`, letterSpacing: '.05em' }}>
+                <Shield size={11} /> ADMIN
+              </div>
+            </div>
+
+            {adminStats && adminStats.pending > 0 && (
+              <div onClick={() => setScreen('admin-pending')} style={{ cursor: 'pointer', background: C.terracotta, borderRadius: 14, padding: 16, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, color: '#fff' }}>
+                <div style={{ width: 42, height: 42, borderRadius: 12, background: '#fff', color: C.terracotta, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                  <Bell size={18} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ font: `500 15px ${font.serif}` }}>
+                    {adminStats.pending} pending seller{adminStats.pending === 1 ? '' : 's'}
+                  </div>
+                  <div style={{ font: `400 12px ${font.sans}`, opacity: .9, marginTop: 2 }}>
+                    Waiting for your review
+                  </div>
+                </div>
+                <ChevronRight size={20} />
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 14 }}>
+              {[
+                { label: 'Users', value: adminStats?.totalUsers ?? '—', color: C.ink },
+                { label: 'Sellers', value: adminStats?.sellers ?? '—', color: C.green },
+                { label: 'Dishes', value: adminStats?.totalDishes ?? '—', color: C.terracotta },
+                { label: 'Orders', value: adminStats?.totalOrders ?? '—', color: C.gold },
+              ].map(t => (
+                <div key={t.label} style={{ background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ font: `500 11px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em' }}>{t.label}</div>
+                  <div style={{ font: `600 24px ${font.serif}`, color: t.color, marginTop: 4 }}>{t.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, overflow: 'hidden', marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <button onClick={() => setScreen('admin-pending')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderBottom: `1px solid ${C.hairline}` }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: adminStats && adminStats.pending > 0 ? C.terracottaLight : C.cardAlt, color: adminStats && adminStats.pending > 0 ? C.terracotta : C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <UserCheck size={17} />
+                </div>
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Pending sellers</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>{adminStats?.pending ?? 0} waiting</div>
+                </div>
+                <ChevronRight size={16} color={C.muted} />
+              </button>
+              <button onClick={() => setScreen('admin-users')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderBottom: `1px solid ${C.hairline}` }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: C.cardAlt, color: C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <UserIcon size={17} />
+                </div>
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>All users</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>Search, filter, moderate</div>
+                </div>
+                <ChevronRight size={16} color={C.muted} />
+              </button>
+              <button onClick={() => setScreen('admin-dishes')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: 14 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: C.cardAlt, color: C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <ChefHat size={17} />
+                </div>
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Dish moderation</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                    Delete dishes{adminStats && adminStats.orphanDishes > 0 ? ` · ${adminStats.orphanDishes} with no photo` : ''}
+                  </div>
+                </div>
+                <ChevronRight size={16} color={C.muted} />
+              </button>
+            </div>
+
+            <div style={{ font: `400 11px ${font.sans}`, color: C.muted, textAlign: 'center', marginTop: 20 }}>
+              {adminStats?.admins ?? 0} admin{adminStats?.admins === 1 ? '' : 's'} · {adminStats?.suspended ?? 0} suspended
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN: PENDING SELLERS ================= */}
+        {screen === 'admin-pending' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Pending sellers</div>
+            </div>
+
+            {adminPending.length === 0 ? (
+              <div style={{ padding: '40px 22px', textAlign: 'center', color: C.muted }}>
+                <CheckCircle size={32} style={{ opacity: .4, marginBottom: 12, color: C.green }} />
+                <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>No one waiting</div>
+                <div style={{ font: `400 12px ${font.sans}`, marginTop: 4 }}>You&apos;re all caught up.</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {adminPending.map(p => (
+                  <div key={p.id} style={{ background: C.card, borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      {p.photo_url ? (
+                        <span style={{ width: 44, height: 44, borderRadius: '50%', backgroundImage: `url(${p.photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                      ) : (
+                        <span style={{ width: 44, height: 44, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 16px ${font.sans}`, flex: 'none' }}>{p.avatar}</span>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{p.kitchen_name || p.name}</div>
+                        <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                          {p.legal_name} · {p.email}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, font: `400 11.5px ${font.sans}` }}>
+                      <div style={{ padding: 8, background: C.surface, borderRadius: 8 }}>
+                        <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>ADDRESS</div>
+                        <div style={{ color: C.ink }}>{p.prep_address || '—'}</div>
+                      </div>
+                      <div style={{ padding: 8, background: C.surface, borderRadius: 8 }}>
+                        <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>PERMIT</div>
+                        <div style={{ color: C.ink }}>{p.has_permit ? (p.permit_number || 'Yes (no #)') : 'No'}</div>
+                      </div>
+                      <div style={{ padding: 8, background: C.surface, borderRadius: 8 }}>
+                        <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>HOURS</div>
+                        <div style={{ color: C.ink }}>{p.cooking_hours || '—'}</div>
+                      </div>
+                      <div style={{ padding: 8, background: C.surface, borderRadius: 8 }}>
+                        <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>ATTESTED</div>
+                        <div style={{ color: p.cottage_food_attested ? C.green : '#c94b4b' }}>{p.cottage_food_attested ? 'Yes' : 'No'}</div>
+                      </div>
+                    </div>
+
+                    {p.kitchen_flags && (
+                      <div style={{ marginTop: 10, display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        {p.kitchen_flags.split(',').map((f: string) => f.trim()).filter(Boolean).map((flag: string) => (
+                          <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '3px 8px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {adminShowRejectFor === p.id ? (
+                      <div style={{ marginTop: 12, padding: 12, background: '#fceded', borderRadius: 10 }}>
+                        <div style={{ font: `500 12px ${font.sans}`, color: '#8a2a2a', marginBottom: 6 }}>Rejection reason</div>
+                        <textarea
+                          value={adminRejectReason}
+                          onChange={(e) => setAdminRejectReason(e.target.value)}
+                          placeholder="Why isn't this seller approved?"
+                          rows={2}
+                          style={{ width: '100%', padding: 8, border: `1px solid ${C.divider}`, borderRadius: 8, font: `400 13px ${font.sans}`, background: '#fff', resize: 'none' }}
+                        />
+                        <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                          <button onClick={() => { setAdminShowRejectFor(null); setAdminRejectReason(''); }} style={{ flex: 1, padding: 8, background: 'transparent', color: C.muted, borderRadius: 8, font: `500 12px ${font.sans}` }}>Cancel</button>
+                          <button
+                            onClick={() => adminRejectSeller(p.id, adminRejectReason)}
+                            disabled={adminActionSubmitting || !adminRejectReason.trim()}
+                            style={{ flex: 2, padding: 8, background: '#c94b4b', color: '#fff', borderRadius: 8, font: `500 12px ${font.sans}`, opacity: adminActionSubmitting ? .7 : 1 }}
+                          >
+                            Confirm reject
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                        <button
+                          onClick={() => setAdminShowRejectFor(p.id)}
+                          disabled={adminActionSubmitting}
+                          style={{ flex: 1, padding: 10, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}
+                        >
+                          <XCircle size={14} /> Reject
+                        </button>
+                        <button
+                          onClick={() => adminApproveSeller(p.id)}
+                          disabled={adminActionSubmitting}
+                          style={{ flex: 2, padding: 10, background: C.green, color: '#fff', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, opacity: adminActionSubmitting ? .7 : 1 }}
+                        >
+                          <CheckCircle size={14} /> Approve
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ================= ADMIN: ALL USERS ================= */}
+        {screen === 'admin-users' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>All users</div>
+            </div>
+
+            <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <Search size={15} color={C.muted} />
+              <input
+                type="text"
+                value={adminUserSearch}
+                onChange={(e) => setAdminUserSearch(e.target.value)}
+                placeholder="Search by name or email…"
+                style={{ flex: 1, border: 'none', outline: 'none', font: `400 13px ${font.sans}`, background: 'transparent' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 12 }}>
+              {[
+                { key: 'all', label: 'All' },
+                { key: 'pending', label: 'Pending' },
+                { key: 'sellers', label: 'Sellers' },
+                { key: 'suspended', label: 'Suspended' },
+                { key: 'admins', label: 'Admins' },
+                { key: 'disabled', label: 'Disabled' },
+              ].map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setAdminUserFilter(f.key as any)}
+                  style={{ flex: 'none', padding: '6px 12px', background: adminUserFilter === f.key ? C.ink : C.card, color: adminUserFilter === f.key ? '#fff' : C.inkSoft, border: `1px solid ${adminUserFilter === f.key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminUsers.map(u => (
+                <button
+                  key={u.id}
+                  onClick={() => loadAdminUserDetail(u.id)}
+                  style={{ background: C.card, borderRadius: 12, padding: 12, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textAlign: 'left', opacity: u.account_disabled ? .5 : 1 }}
+                >
+                  {u.photo_url ? (
+                    <span style={{ width: 38, height: 38, borderRadius: '50%', backgroundImage: `url(${u.photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                  ) : (
+                    <span style={{ width: 38, height: 38, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 14px ${font.sans}`, flex: 'none' }}>{u.avatar}</span>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ font: `500 14px ${font.serif}`, color: C.ink }}>{u.name}</span>
+                      {u.role === 'admin' && (
+                        <span style={{ padding: '1px 6px', background: C.ink, color: '#fff', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.05em' }}>ADMIN</span>
+                      )}
+                    </div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</div>
+                    <div style={{ display: 'flex', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
+                      {u.seller_status !== 'not_seller' && (
+                        <span style={{ padding: '2px 7px', borderRadius: 6, font: `500 10px ${font.sans}`,
+                          background: u.seller_status === 'approved' ? C.greenLight : u.seller_status === 'pending' ? '#fff9e6' : '#fceded',
+                          color: u.seller_status === 'approved' ? C.green : u.seller_status === 'pending' ? '#7a5c0b' : '#8a2a2a' }}>
+                          {u.seller_status}
+                        </span>
+                      )}
+                      {u.account_disabled && (
+                        <span style={{ padding: '2px 7px', borderRadius: 6, font: `500 10px ${font.sans}`, background: '#fceded', color: '#8a2a2a' }}>disabled</span>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronRight size={14} color={C.muted} />
+                </button>
+              ))}
+              {adminUsers.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No users match this filter.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN: USER DETAIL ================= */}
+        {screen === 'admin-user-detail' && user.role === 'admin' && adminSelectedUser && (() => {
+          const u = adminSelectedUser.user;
+          const isMe = u.id === user.id;
+          return (
+            <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                <button onClick={() => setScreen('admin-users')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                  <ArrowLeft size={18} />
+                </button>
+                <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>User</div>
+              </div>
+
+              <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  {u.photo_url ? (
+                    <span style={{ width: 54, height: 54, borderRadius: '50%', backgroundImage: `url(${u.photo_url})`, backgroundSize: 'cover' }} />
+                  ) : (
+                    <span style={{ width: 54, height: 54, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 22px ${font.sans}` }}>{u.avatar}</span>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ font: `500 17px ${font.serif}`, color: C.ink }}>{u.name}</span>
+                      {u.role === 'admin' && (
+                        <span style={{ padding: '2px 8px', background: C.ink, color: '#fff', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.05em' }}>ADMIN</span>
+                      )}
+                      {isMe && (
+                        <span style={{ padding: '2px 8px', background: C.terracottaLight, color: C.terracotta, borderRadius: 6, font: `500 9px ${font.sans}` }}>YOU</span>
+                      )}
+                    </div>
+                    <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 2 }}>{u.email}</div>
+                    {u.kitchen_name && (
+                      <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>Kitchen: {u.kitchen_name}</div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                  {[
+                    { label: 'DISHES', value: adminSelectedUser.stats.dishes },
+                    { label: 'BOUGHT', value: adminSelectedUser.stats.ordersAsBuyer },
+                    { label: 'SOLD', value: adminSelectedUser.stats.ordersAsSeller },
+                  ].map(s => (
+                    <div key={s.label} style={{ padding: 10, background: C.surface, borderRadius: 8, textAlign: 'center' }}>
+                      <div style={{ font: `500 10px ${font.sans}`, color: C.muted, letterSpacing: '.05em' }}>{s.label}</div>
+                      <div style={{ font: `600 18px ${font.serif}`, color: C.ink, marginTop: 2 }}>{s.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Seller status card */}
+              <div style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Seller status</div>
+                <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 6 }}>
+                  {u.seller_status === 'not_seller' && 'Not a seller'}
+                  {u.seller_status === 'pending' && 'Pending review'}
+                  {u.seller_status === 'approved' && 'Approved seller'}
+                  {u.seller_status === 'rejected' && 'Rejected'}
+                  {u.seller_status === 'suspended' && 'Suspended'}
+                </div>
+                {u.rejection_reason && (
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>
+                    Rejection reason: {u.rejection_reason}
+                  </div>
+                )}
+                {u.suspended_reason && (
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>
+                    Suspension reason: {u.suspended_reason}
+                  </div>
+                )}
+
+                {u.seller_status === 'pending' && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => adminApproveSeller(u.id)} disabled={adminActionSubmitting} style={{ flex: 1, padding: 10, background: C.green, color: '#fff', borderRadius: 10, font: `500 12.5px ${font.sans}` }}>Approve</button>
+                    <button onClick={() => setAdminShowRejectFor(u.id)} disabled={adminActionSubmitting} style={{ flex: 1, padding: 10, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', borderRadius: 10, font: `500 12.5px ${font.sans}` }}>Reject</button>
+                  </div>
+                )}
+                {u.seller_status === 'approved' && !isMe && (
+                  <button onClick={() => setAdminShowSuspendFor(u.id)} disabled={adminActionSubmitting} style={{ width: '100%', padding: 10, background: '#fff9e6', border: `1px solid #f0d67a`, color: '#7a5c0b', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <Pause size={14} /> Suspend seller
+                  </button>
+                )}
+                {u.seller_status === 'suspended' && (
+                  <button onClick={() => adminUnsuspendSeller(u.id)} disabled={adminActionSubmitting} style={{ width: '100%', padding: 10, background: C.green, color: '#fff', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <Play size={14} /> Reinstate
+                  </button>
+                )}
+
+                {adminShowRejectFor === u.id && (
+                  <div style={{ marginTop: 10, padding: 12, background: '#fceded', borderRadius: 10 }}>
+                    <textarea value={adminRejectReason} onChange={(e) => setAdminRejectReason(e.target.value)} placeholder="Rejection reason" rows={2} style={{ width: '100%', padding: 8, border: `1px solid ${C.divider}`, borderRadius: 8, font: `400 13px ${font.sans}`, background: '#fff', resize: 'none' }} />
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      <button onClick={() => { setAdminShowRejectFor(null); setAdminRejectReason(''); }} style={{ flex: 1, padding: 8, background: 'transparent', color: C.muted, borderRadius: 8, font: `500 12px ${font.sans}` }}>Cancel</button>
+                      <button onClick={() => adminRejectSeller(u.id, adminRejectReason)} disabled={!adminRejectReason.trim()} style={{ flex: 2, padding: 8, background: '#c94b4b', color: '#fff', borderRadius: 8, font: `500 12px ${font.sans}` }}>Confirm reject</button>
+                    </div>
+                  </div>
+                )}
+
+                {adminShowSuspendFor === u.id && (
+                  <div style={{ marginTop: 10, padding: 12, background: '#fff9e6', borderRadius: 10 }}>
+                    <textarea value={adminSuspendReason} onChange={(e) => setAdminSuspendReason(e.target.value)} placeholder="Why suspend this seller?" rows={2} style={{ width: '100%', padding: 8, border: `1px solid ${C.divider}`, borderRadius: 8, font: `400 13px ${font.sans}`, background: '#fff', resize: 'none' }} />
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                      <button onClick={() => { setAdminShowSuspendFor(null); setAdminSuspendReason(''); }} style={{ flex: 1, padding: 8, background: 'transparent', color: C.muted, borderRadius: 8, font: `500 12px ${font.sans}` }}>Cancel</button>
+                      <button onClick={() => adminSuspendSeller(u.id, adminSuspendReason)} disabled={!adminSuspendReason.trim()} style={{ flex: 2, padding: 8, background: '#b8860b', color: '#fff', borderRadius: 8, font: `500 12px ${font.sans}` }}>Confirm suspend</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Account controls */}
+              {!isMe && (
+                <div style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Account</div>
+
+                  <button onClick={() => adminToggleDisabled(u.id, !u.account_disabled)} disabled={adminActionSubmitting} style={{ width: '100%', padding: 10, marginBottom: 8, background: u.account_disabled ? C.green : '#fceded', color: u.account_disabled ? '#fff' : '#8a2a2a', border: u.account_disabled ? 'none' : `1px solid #f5b8b8`, borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    {u.account_disabled ? <><UserCheck size={14} /> Re-enable account</> : <><UserX size={14} /> Disable account</>}
+                  </button>
+
+                  <button onClick={() => adminSetRole(u.id, u.role === 'admin' ? 'user' : 'admin')} disabled={adminActionSubmitting} style={{ width: '100%', padding: 10, background: u.role === 'admin' ? '#fceded' : C.ink, color: u.role === 'admin' ? '#8a2a2a' : '#fff', border: u.role === 'admin' ? `1px solid #f5b8b8` : 'none', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <Shield size={14} /> {u.role === 'admin' ? 'Remove admin' : 'Promote to admin'}
+                  </button>
+                </div>
+              )}
+
+              {adminSelectedUserOrders.length > 0 && (
+                <div style={{ background: C.card, borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Recent orders ({adminSelectedUserOrders.length})</div>
+                  {adminSelectedUserOrders.slice(0, 20).map((o: any) => (
+                    <div key={o.id} style={{ padding: '8px 0', borderBottom: `1px solid ${C.hairline}`, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ font: `500 12.5px ${font.sans}`, color: C.ink }}>
+                          {o.quantity}× {o.dish_name}
+                        </div>
+                        <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                          {o.buyer_id === u.id ? `bought from ${o.seller_name}` : `sold to ${o.buyer_name}`} · {timeAgo(o.created_at)}
+                        </div>
+                      </div>
+                      <div style={{ flex: 'none', textAlign: 'right' }}>
+                        <div style={{ font: `500 12.5px ${font.serif}`, color: C.terracotta }}>${Number(o.total_price).toFixed(2)}</div>
+                        <div style={{ font: `400 10px ${font.sans}`, color: C.muted, marginTop: 2 }}>{o.status}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ================= ADMIN: DISH MODERATION ================= */}
+        {screen === 'admin-dishes' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Dishes</div>
+            </div>
+
+            <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <Search size={15} color={C.muted} />
+              <input
+                type="text"
+                value={adminDishSearch}
+                onChange={(e) => setAdminDishSearch(e.target.value)}
+                placeholder="Search by dish name or cook…"
+                style={{ flex: 1, border: 'none', outline: 'none', font: `400 13px ${font.sans}`, background: 'transparent' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminDishes.map(d => (
+                <div key={d.id} style={{ background: C.card, borderRadius: 12, padding: 10, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ width: 44, height: 44, borderRadius: 10, overflow: 'hidden', flex: 'none' }}>
+                    {d.photo_url ? (
+                      <div style={{ width: '100%', height: '100%', backgroundImage: `url(${d.photo_url})`, backgroundSize: 'cover' }} />
+                    ) : (
+                      <div style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(45deg,#ece3d5,#ece3d5 9px,#f2ebde 9px,#f2ebde 18px)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{d.emoji}</div>
+                    )}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ font: `500 13px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.name}</div>
+                    <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                      {d.seller_name} · ${Number(d.price).toFixed(2)}
+                      {!d.photo_url && <span style={{ color: '#c94b4b', marginLeft: 6 }}>· no photo</span>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => adminDeleteDishAction(d.id)}
+                    disabled={adminActionSubmitting}
+                    style={{ padding: 6, color: '#c94b4b', display: 'flex', alignItems: 'center' }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+              {adminDishes.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No dishes found.
+                </div>
+              )}
+            </div>
           </div>
         )}
 

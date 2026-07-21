@@ -53,7 +53,13 @@ export async function POST(request: NextRequest) {
     const me = await requireSessionUser();
 
     if (action === 'create') {
-      // Server enforces seller_id is the current user — client can't spoof
+      // Only approved sellers can post dishes
+      if (me.seller_status !== 'approved') {
+        return NextResponse.json({ error: 'Only approved sellers can post dishes' }, { status: 403 });
+      }
+      if (me.account_disabled) {
+        return NextResponse.json({ error: 'Account is disabled' }, { status: 403 });
+      }
       const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null);
       return NextResponse.json(dish);
     }

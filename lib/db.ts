@@ -33,6 +33,13 @@ export async function initializeDatabase() {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS clerk_user_id TEXT UNIQUE`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user'`;
     await sql`CREATE INDEX IF NOT EXISTS idx_users_clerk_id ON users(clerk_user_id)`;
+    // Seller approval workflow
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS seller_status TEXT DEFAULT 'not_seller'`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS rejection_reason TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS account_disabled BOOLEAN DEFAULT false`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT`;
+    // Backfill: any user who is currently is_seller=true should be treated as approved
+    await sql`UPDATE users SET seller_status = 'approved' WHERE is_seller = true AND seller_status = 'not_seller'`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dishes (
@@ -223,6 +230,8 @@ export async function getDishes() {
            u.cooking_hours as seller_cooking_hours
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
+    WHERE u.seller_status = 'approved'
+      AND u.account_disabled = false
     ORDER BY d.created_at DESC
   `;
   return result.rows;
@@ -480,6 +489,215 @@ export async function getUnreadCounts(userId: number) {
       AND o.status NOT IN ('picked_up', 'cancelled')
     GROUP BY o.id
     HAVING COUNT(m.id) > 0
+  `;
+  return result.rows;
+}
+
+// ============= ADMIN =============
+
+export async function submitSellerForReview(userId: number) {
+  const result = await sql`
+    UPDATE users SET seller_status = 'pending', is_seller = true
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function approveSeller(userId: number) {
+  const result = await sql`
+    UPDATE users SET seller_status = 'approved', rejection_reason = NULL, suspended_reason = NULL
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function rejectSeller(userId: number, reason: string) {
+  const result = await sql`
+    UPDATE users SET seller_status = 'rejected', rejection_reason = ${reason}
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function suspendSeller(userId: number, reason: string) {
+  const result = await sql`
+    UPDATE users SET seller_status = 'suspended', suspended_reason = ${reason}
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function unsuspendSeller(userId: number) {
+  const result = await sql`
+    UPDATE users SET seller_status = 'approved', suspended_reason = NULL
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function setAccountDisabled(userId: number, disabled: boolean) {
+  const result = await sql`
+    UPDATE users SET account_disabled = ${disabled}
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function setUserRole(userId: number, role: 'user' | 'admin') {
+  const result = await sql`
+    UPDATE users SET role = ${role}
+    WHERE id = ${userId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getPendingSellers() {
+  const result = await sql`
+    SELECT id, name, email, avatar, photo_url, bio, prep_address,
+           legal_name, kitchen_name, cottage_food_attested, has_permit, permit_number,
+           kitchen_flags, cooking_hours, pickup_description, created_at
+    FROM users
+    WHERE seller_status = 'pending' AND account_disabled = false
+    ORDER BY created_at ASC
+  `;
+  return result.rows;
+}
+
+export async function getAllUsersForAdmin(filter?: string, search?: string) {
+  const q = search ? `%${search.toLowerCase()}%` : null;
+  if (filter === 'pending') {
+    const result = q
+      ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE seller_status = 'pending' AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
+      : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE seller_status = 'pending' ORDER BY created_at DESC`;
+    return result.rows;
+  }
+  if (filter === 'sellers') {
+    const result = q
+      ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE seller_status = 'approved' AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
+      : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE seller_status = 'approved' ORDER BY created_at DESC`;
+    return result.rows;
+  }
+  if (filter === 'suspended') {
+    const result = q
+      ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE seller_status = 'suspended' AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
+      : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE seller_status = 'suspended' ORDER BY created_at DESC`;
+    return result.rows;
+  }
+  if (filter === 'admins') {
+    const result = q
+      ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE role = 'admin' AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
+      : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE role = 'admin' ORDER BY created_at DESC`;
+    return result.rows;
+  }
+  if (filter === 'disabled') {
+    const result = q
+      ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE account_disabled = true AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
+      : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                  FROM users WHERE account_disabled = true ORDER BY created_at DESC`;
+    return result.rows;
+  }
+  // 'all' or unspecified
+  const result = q
+    ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                FROM users WHERE LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q} ORDER BY created_at DESC LIMIT 200`
+    : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
+                FROM users ORDER BY created_at DESC LIMIT 200`;
+  return result.rows;
+}
+
+export async function getUserDetailForAdmin(userId: number) {
+  const userResult = await sql`SELECT * FROM users WHERE id = ${userId} LIMIT 1`;
+  const user = userResult.rows[0];
+  if (!user) return null;
+
+  // Count dishes, orders as buyer, orders as seller
+  const dishCount = await sql`SELECT COUNT(*)::int as c FROM dishes WHERE seller_id = ${userId}`;
+  const orderAsBuyer = await sql`SELECT COUNT(*)::int as c FROM orders WHERE buyer_id = ${userId}`;
+  const orderAsSeller = await sql`SELECT COUNT(*)::int as c FROM orders o JOIN dishes d ON o.dish_id = d.id WHERE d.seller_id = ${userId}`;
+
+  return {
+    user,
+    stats: {
+      dishes: dishCount.rows[0].c,
+      ordersAsBuyer: orderAsBuyer.rows[0].c,
+      ordersAsSeller: orderAsSeller.rows[0].c,
+    },
+  };
+}
+
+export async function getAllDishesForAdmin(search?: string) {
+  const q = search ? `%${search.toLowerCase()}%` : null;
+  const result = q
+    ? await sql`
+        SELECT d.id, d.name, d.emoji, d.photo_url, d.price, d.likes, d.created_at,
+               u.id as seller_id, u.name as seller_name, u.seller_status
+        FROM dishes d JOIN users u ON d.seller_id = u.id
+        WHERE LOWER(d.name) LIKE ${q} OR LOWER(u.name) LIKE ${q}
+        ORDER BY d.created_at DESC LIMIT 200
+      `
+    : await sql`
+        SELECT d.id, d.name, d.emoji, d.photo_url, d.price, d.likes, d.created_at,
+               u.id as seller_id, u.name as seller_name, u.seller_status
+        FROM dishes d JOIN users u ON d.seller_id = u.id
+        ORDER BY d.created_at DESC LIMIT 200
+      `;
+  return result.rows;
+}
+
+export async function adminDeleteDish(dishId: number) {
+  await sql`DELETE FROM dishes WHERE id = ${dishId}`;
+  return { success: true };
+}
+
+export async function getAdminStats() {
+  const pending = await sql`SELECT COUNT(*)::int as c FROM users WHERE seller_status = 'pending' AND account_disabled = false`;
+  const sellers = await sql`SELECT COUNT(*)::int as c FROM users WHERE seller_status = 'approved'`;
+  const suspended = await sql`SELECT COUNT(*)::int as c FROM users WHERE seller_status = 'suspended'`;
+  const admins = await sql`SELECT COUNT(*)::int as c FROM users WHERE role = 'admin'`;
+  const totalUsers = await sql`SELECT COUNT(*)::int as c FROM users`;
+  const totalDishes = await sql`SELECT COUNT(*)::int as c FROM dishes`;
+  const totalOrders = await sql`SELECT COUNT(*)::int as c FROM orders`;
+  const orphanDishes = await sql`SELECT COUNT(*)::int as c FROM dishes WHERE photo_url IS NULL`;
+
+  return {
+    pending: pending.rows[0].c,
+    sellers: sellers.rows[0].c,
+    suspended: suspended.rows[0].c,
+    admins: admins.rows[0].c,
+    totalUsers: totalUsers.rows[0].c,
+    totalDishes: totalDishes.rows[0].c,
+    totalOrders: totalOrders.rows[0].c,
+    orphanDishes: orphanDishes.rows[0].c,
+  };
+}
+
+export async function getAdminUserOrders(userId: number) {
+  const result = await sql`
+    SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
+           o.created_at, d.name as dish_name, d.emoji as dish_emoji,
+           b.name as buyer_name, s.name as seller_name, s.id as seller_id
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    JOIN users b ON o.buyer_id = b.id
+    JOIN users s ON d.seller_id = s.id
+    WHERE o.buyer_id = ${userId} OR d.seller_id = ${userId}
+    ORDER BY o.created_at DESC LIMIT 100
   `;
   return result.rows;
 }
