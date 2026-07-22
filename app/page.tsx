@@ -3512,6 +3512,12 @@ export default function Home() {
                 user.legal_name, user.kitchen_name, user.cottage_food_attested,
                 user.has_permit != null, user.kitchen_flags, user.cooking_hours, user.pickup_description,
               ].filter(Boolean).length;
+              const sellerReviewMissing: string[] = [];
+              if (!user.legal_name?.trim())      sellerReviewMissing.push('Legal name');
+              if (!user.kitchen_name?.trim())    sellerReviewMissing.push('Kitchen name');
+              if (!user.cottage_food_attested)   sellerReviewMissing.push('Cottage food attestation');
+              if (user.has_permit == null)       sellerReviewMissing.push('Food handler permit answer');
+              if (!user.prep_address?.trim())    sellerReviewMissing.push('Kitchen address');
               const total = 7;
               const pct = Math.round((filled / total) * 100);
               const complete = filled === total;
@@ -3652,7 +3658,7 @@ export default function Home() {
                   <Plus size={16} /> Add to menu
                 </button>
               </div>
-            ) : user.seller_status === 'not_seller' && user.legal_name && user.kitchen_name && user.cottage_food_attested && user.has_permit != null && user.prep_address ? (
+            ) : user.seller_status === 'not_seller' && user.legal_name && user.kitchen_name && user.cottage_food_attested && user.has_permit != null && user.kitchen_environment && user.cooking_hours && user.pickup_description && user.prep_address ? (
               <div style={{ background: C.greenLight, borderRadius: 14, padding: 16, marginBottom: 16, textAlign: 'center' }}>
                 <div style={{ font: `500 15px ${font.serif}`, color: C.green, marginBottom: 6 }}>Ready to submit</div>
                 <div style={{ font: `400 12.5px ${font.sans}`, color: C.green, marginBottom: 12 }}>

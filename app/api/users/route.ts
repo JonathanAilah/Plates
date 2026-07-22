@@ -67,6 +67,9 @@ export async function POST(request: NextRequest) {
       if (!fresh.kitchen_name) missing.push('Kitchen name');
       if (!fresh.cottage_food_attested) missing.push('Cottage food attestation');
       if (fresh.has_permit == null) missing.push('Food handler permit answer');
+      if (!fresh.kitchen_environment) missing.push('Kitchen environment');
+      if (!fresh.cooking_hours) missing.push('Cooking hours');
+      if (!fresh.pickup_description) missing.push('Pickup description');
       if (!fresh.prep_address) missing.push('Kitchen address');
       if (missing.length) {
         return NextResponse.json({ error: 'Missing required fields', missing }, { status: 400 });
