@@ -495,6 +495,43 @@ async function refundAndCancelOrder(orderId: string, currentPaymentIntentId: str
   return result.rows[0];
 }
 
+// ============= PUSH SUBSCRIPTIONS =============
+
+// Save or update a cook's push subscription. Upserts on endpoint so
+// re-enabling notifications doesn't create duplicate rows.
+export async function savePushSubscription(
+  userId: number,
+  endpoint: string,
+  p256dh: string,
+  auth: string
+) {
+  const result = await sql`
+    INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+    VALUES (${userId}, ${endpoint}, ${p256dh}, ${auth})
+    ON CONFLICT (endpoint)
+    DO UPDATE SET user_id = ${userId}, p256dh = ${p256dh}, auth = ${auth}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// Get all active push subscriptions for a user (they may have more than
+// one device/browser).
+export async function getPushSubscriptions(userId: number) {
+  const result = await sql`
+    SELECT * FROM push_subscriptions WHERE user_id = ${userId}
+  `;
+  return result.rows;
+}
+
+// Remove a subscription — called when a cook disables notifications,
+// or when a send fails because the subscription is no longer valid.
+export async function deletePushSubscription(endpoint: string) {
+  await sql`
+    DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}
+  `;
+}
+
 // Cook-initiated cancel: allowed at any active stage.
 export async function cookCancelOrder(orderId: string, cookId: number) {
   const check = await sql`

@@ -1643,9 +1643,9 @@ export default function Home() {
   };
 
   const removeDish = async (dishId: number) => {
-  if (!confirm('Delete this dish? This cannot be undone.')) return;
-  try {
-    await fetch('/api/dishes', {
+    if (!confirm('Delete this dish? This cannot be undone.')) return;
+    try {
+      await fetch('/api/dishes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete', dishId }),
@@ -1673,6 +1673,62 @@ export default function Home() {
     }
     // Not yet a seller: go fill out the profile and submit for review.
     setScreen('cook-profile');
+  };
+
+  // Converts a base64 VAPID key into the Uint8Array format the Push API expects.
+  function urlBase64ToUint8Array(base64String: string) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; i++) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  // Ask the browser for notification permission and register a push
+  // subscription for this cook, saving it to the server.
+  const enablePushNotifications = async () => {
+    if (!user) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      showToast('Push notifications are not supported in this browser');
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        showToast('Notification permission denied');
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!),
+      });
+
+      const res = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'subscribe',
+          userId: user.id,
+          subscription: subscription.toJSON(),
+        }),
+      });
+
+      if (!res.ok) {
+        showToast('Could not save notification settings');
+        return;
+      }
+
+      showToast('Order notifications enabled!');
+    } catch (error) {
+      console.error('Push subscription error:', error);
+      showToast('Could not enable notifications');
+    }
   };
 
   const connectStripePayments = async () => {
@@ -3513,6 +3569,20 @@ export default function Home() {
               </div>
             ) : user.seller_status === 'approved' && user.is_seller ? (
               <div style={{ marginBottom: 16 }}>
+                <div style={{ background: C.card, borderRadius: 12, padding: 14, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Order notifications</div>
+                    <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                      Get notified the moment a new order comes in, even with the app closed.
+                    </div>
+                  </div>
+                  <button
+                    onClick={enablePushNotifications}
+                    style={{ padding: '10px 14px', background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}`, border: 'none', cursor: 'pointer', flex: 'none' }}
+                  >
+                    Enable
+                  </button>
+                </div>
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>What are you cooking today?</div>
                 <input type="text" id="dishName" placeholder="e.g., Homemade Pasta" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
 
