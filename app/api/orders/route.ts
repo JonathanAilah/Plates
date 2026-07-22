@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@vercel/postgres';
-import { createOrder, getOrders, updateOrderStatus, getSellerOrders } from '@/lib/db';
+import { createOrder, getOrders, updateOrderStatus, getSellerOrders, cookCancelOrder, buyerCancelOrder } from '@/lib/db';
 import { requireSessionUser } from '@/lib/auth';
 
 function errorResponse(error: any) {
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
       }
       // Verify the requester is either the buyer (for cancel) or the seller (for other transitions)
       const check = await sql`
-        SELECT o.buyer_id, d.seller_id FROM orders o
+        SELECT o.buyer_id, o.status AS current_status, d.seller_id FROM orders o
         JOIN dishes d ON o.dish_id = d.id
         WHERE o.id = ${orderId} LIMIT 1
       `;
@@ -62,11 +62,22 @@ export async function POST(request: NextRequest) {
       const isBuyer = row.buyer_id === me.id;
       const isSeller = row.seller_id === me.id;
       if (!isBuyer && !isSeller) return NextResponse.json({ error: 'Not your order' }, { status: 403 });
-      // Buyers can only cancel; sellers drive other transitions
-      if (isBuyer && !isSeller && status !== 'cancelled') {
-        return NextResponse.json({ error: 'Only the cook can advance status' }, { status: 403 });
+      // Buyers can only cancel, and only while 'placed' — route through refund-aware cancel
+      if (isBuyer && !isSeller) {
+        if (status !== 'cancelled') {
+          return NextResponse.json({ error: 'Only the cook can advance status' }, { status: 403 });
+        }
+        const order = await buyerCancelOrder(orderId, me.id);
+        return NextResponse.json(order);
       }
+      // Seller advancing status (not cancel — cooks cancel via the cookCancel action)
       const order = await updateOrderStatus(orderId, status);
+      return NextResponse.json(order);
+    }
+
+    if (action === 'cookCancel') {
+      if (!orderId) return NextResponse.json({ error: 'orderId required' }, { status: 400 });
+      const order = await cookCancelOrder(orderId, me.id);
       return NextResponse.json(order);
     }
 

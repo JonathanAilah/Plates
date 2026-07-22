@@ -474,6 +474,82 @@ export async function updateOrderStatus(orderId: string, status: string) {
   return result.rows[0];
 }
 
+// ============= CANCEL + REFUND =============
+// Shared internal helper: refunds (if paid) then marks cancelled.
+// Assumes authorization + status checks have already been done by the caller.
+async function refundAndCancelOrder(orderId: string, currentPaymentIntentId: string | null) {
+  // Issue full refund FIRST (before touching status)
+  if (currentPaymentIntentId) {
+    const { stripe } = await import('./stripe');
+    await stripe.refunds.create({
+      payment_intent: currentPaymentIntentId,
+    });
+  }
+  // Only mark cancelled AFTER refund succeeds
+  const result = await sql`
+    UPDATE orders
+    SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${orderId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// Cook-initiated cancel: allowed at any active stage.
+export async function cookCancelOrder(orderId: string, cookId: number) {
+  const check = await sql`
+    SELECT o.id, o.status, o.stripe_payment_intent_id, d.seller_id
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE o.id = ${orderId}
+    LIMIT 1
+  `;
+  const row = check.rows[0];
+  if (!row) {
+    const e: any = new Error('Order not found');
+    e.status = 404;
+    throw e;
+  }
+  if (row.seller_id !== cookId) {
+    const e: any = new Error('Not your order');
+    e.status = 403;
+    throw e;
+  }
+  if (row.status === 'picked_up' || row.status === 'cancelled') {
+    const e: any = new Error(`Cannot cancel an order that is ${row.status}`);
+    e.status = 400;
+    throw e;
+  }
+  return refundAndCancelOrder(orderId, row.stripe_payment_intent_id);
+}
+
+// Buyer-initiated cancel: allowed ONLY while still 'placed' (before cook accepts).
+export async function buyerCancelOrder(orderId: string, buyerId: number) {
+  const check = await sql`
+    SELECT o.id, o.status, o.stripe_payment_intent_id, o.buyer_id
+    FROM orders o
+    WHERE o.id = ${orderId}
+    LIMIT 1
+  `;
+  const row = check.rows[0];
+  if (!row) {
+    const e: any = new Error('Order not found');
+    e.status = 404;
+    throw e;
+  }
+  if (row.buyer_id !== buyerId) {
+    const e: any = new Error('Not your order');
+    e.status = 403;
+    throw e;
+  }
+  if (row.status !== 'placed') {
+    const e: any = new Error('Order can no longer be cancelled — the cook has already accepted it');
+    e.status = 400;
+    throw e;
+  }
+  return refundAndCancelOrder(orderId, row.stripe_payment_intent_id);
+}
+
 export async function getSellerOrders(sellerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,

@@ -385,6 +385,8 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [generatingPhotoFor, setGeneratingPhotoFor] = useState<number | null>(null);
   const [confirmingPickupFor, setConfirmingPickupFor] = useState<string | null>(null);
+  const [confirmingCookCancelFor, setConfirmingCookCancelFor] = useState<string | null>(null);
+  const [cookCancelSubmitting, setCookCancelSubmitting] = useState(false);
   const [pickupCodeInput, setPickupCodeInput] = useState<string[]>(['', '', '', '']);
   const [pickupCodeError, setPickupCodeError] = useState(false);
   const [pickupCodeSubmitting, setPickupCodeSubmitting] = useState(false);
@@ -488,16 +490,16 @@ export default function Home() {
       console.error('Cook orders load error:', e);
     }
   };
-      const loadEarnings = async () => {
-      try {
-        const res = await fetch('/api/stripe/earnings');
-        if (!res.ok) return;
-        const data = await res.json();
-        setEarnings(data);
-      } catch (e) {
-        console.error('Load earnings error:', e);
-      }
-    };
+  const loadEarnings = async () => {
+    try {
+      const res = await fetch('/api/stripe/earnings');
+      if (!res.ok) return;
+      const data = await res.json();
+      setEarnings(data);
+    } catch (e) {
+      console.error('Load earnings error:', e);
+    }
+  };
   const loadMessages = async (orderId: string, userId: number) => {
     try {
       const res = await fetch(`/api/messages?action=list&orderId=${orderId}&userId=${userId}`);
@@ -534,14 +536,14 @@ export default function Home() {
     } catch (e) { console.error('Admin stats error:', e); }
   };
   const loadAdminFinancials = async () => {
-      try {
-        const res = await fetch('/api/admin?action=financials');
-        if (!res.ok) return;
-        const data = await res.json();
-        setAdminFinancials(data);
-      } catch (e) {
-        console.error('Load admin financials error:', e);
-      }
+    try {
+      const res = await fetch('/api/admin?action=financials');
+      if (!res.ok) return;
+      const data = await res.json();
+      setAdminFinancials(data);
+    } catch (e) {
+      console.error('Load admin financials error:', e);
+    }
   };
   const loadAdminPending = async () => {
     try {
@@ -1137,7 +1139,7 @@ export default function Home() {
                   }
                 } catch (e) { console.error(e); }
               },
-              () => {},
+              () => { },
               { timeout: 8000 }
             );
           }
@@ -1153,10 +1155,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-      if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
-        loadEarnings();
-      }
-    }, [screen, user?.seller_status]);
+    if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
+      loadEarnings();
+    }
+  }, [screen, user?.seller_status]);
 
   // Poll orders when on orders / order-detail / kitchen-queue screens
   useEffect(() => {
@@ -1332,7 +1334,7 @@ export default function Home() {
   const cartTotal = subtotal + serviceFee + (cart.length > 0 ? tipAmount : 0);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
-  
+
   // Phase 1: get PaymentIntent(s) from Stripe, then show the payment screen.
   const placeOrder = async () => {
     if (!user || cart.length === 0) return;
@@ -1448,6 +1450,31 @@ export default function Home() {
       await loadOrders(user.id);
     } catch (error) {
       console.error('Cancel order error:', error);
+    }
+  };
+  // Cook cancels an order they're preparing. Triggers automatic buyer refund server-side.
+  const cookCancelOrder = async (orderId: string) => {
+    if (!user) return;
+    setCookCancelSubmitting(true);
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cookCancel', orderId }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        showToast(data.error || 'Could not cancel order');
+        return;
+      }
+      setConfirmingCookCancelFor(null);
+      showToast('Order cancelled Â· buyer refunded');
+      await loadCookOrders(user.id);
+    } catch (error) {
+      console.error('Cook cancel order error:', error);
+      showToast('Could not cancel order');
+    } finally {
+      setCookCancelSubmitting(false);
     }
   };
   const addDish = async (dishName: string, priceValue: number) => {
@@ -1648,26 +1675,26 @@ export default function Home() {
   };
 
   const connectStripePayments = async () => {
-      if (!user) return;
-      setConnectingStripe(true);
-      try {
-        const res = await fetch('/api/stripe/connect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: user.id }),
-        });
-        const data = await res.json();
-        if (data.url) {
-          window.location.href = data.url;
-        } else {
-          console.error('No onboarding URL returned', data);
-          setConnectingStripe(false);
-        }
-      } catch (error) {
-        console.error(error);
+    if (!user) return;
+    setConnectingStripe(true);
+    try {
+      const res = await fetch('/api/stripe/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error('No onboarding URL returned', data);
         setConnectingStripe(false);
       }
-    };
+    } catch (error) {
+      console.error(error);
+      setConnectingStripe(false);
+    }
+  };
 
   const handleProfilePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1714,7 +1741,7 @@ export default function Home() {
         const updated = await res.json();
         setUser(updated);
       },
-      () => {},
+      () => { },
       { timeout: 8000 }
     );
   };
@@ -2249,226 +2276,226 @@ export default function Home() {
             </div>
 
             {homeTab === 'discover' && (<>
-            <div style={{ padding: '12px 20px 0' }}>
-              <div style={{ background: '#fff', borderRadius: 14, padding: '10px 15px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
-                <Search size={15} color={C.terracotta} strokeWidth={2.5} />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search dishes or cooks…"
-                  style={{ flex: 1, border: 'none', outline: 'none', font: `400 13.5px ${font.sans}`, background: 'transparent', color: C.ink, minWidth: 0 }}
-                />
-                {searchQuery && (
-                  <button onClick={() => setSearchQuery('')} style={{ color: C.muted, padding: 2, display: 'flex' }}>
-                    <X size={15} />
+              <div style={{ padding: '12px 20px 0' }}>
+                <div style={{ background: '#fff', borderRadius: 14, padding: '10px 15px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
+                  <Search size={15} color={C.terracotta} strokeWidth={2.5} />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search dishes or cooks…"
+                    style={{ flex: 1, border: 'none', outline: 'none', font: `400 13.5px ${font.sans}`, background: 'transparent', color: C.ink, minWidth: 0 }}
+                  />
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')} style={{ color: C.muted, padding: 2, display: 'flex' }}>
+                      <X size={15} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Filter chips */}
+              <div style={{ padding: '10px 20px 0', display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none' }}>
+                <button
+                  onClick={() => setShowFilterPanel(true)}
+                  style={{
+                    flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px',
+                    background: activeFilterCount > 0 ? C.ink : C.card,
+                    color: activeFilterCount > 0 ? '#fff' : C.inkSoft,
+                    border: `1px solid ${activeFilterCount > 0 ? C.ink : C.divider}`,
+                    borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap'
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+                  </svg>
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 16, height: 16, borderRadius: 8, background: '#fff', color: C.ink, font: `700 10px ${font.sans}`, padding: '0 4px' }}>{activeFilterCount}</span>
+                  )}
+                </button>
+
+                {distanceFilter !== 'any' && (
+                  <button onClick={() => setDistanceFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                    Within {distanceFilter === '1mi' ? '1 mi' : distanceFilter === '3mi' ? '3 mi' : '5 mi'}
+                    <X size={11} />
                   </button>
                 )}
-              </div>
-            </div>
-
-            {/* Filter chips */}
-            <div style={{ padding: '10px 20px 0', display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none' }}>
-              <button
-                onClick={() => setShowFilterPanel(true)}
-                style={{
-                  flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px',
-                  background: activeFilterCount > 0 ? C.ink : C.card,
-                  color: activeFilterCount > 0 ? '#fff' : C.inkSoft,
-                  border: `1px solid ${activeFilterCount > 0 ? C.ink : C.divider}`,
-                  borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap'
-                }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
-                </svg>
-                Filters
-                {activeFilterCount > 0 && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 16, height: 16, borderRadius: 8, background: '#fff', color: C.ink, font: `700 10px ${font.sans}`, padding: '0 4px' }}>{activeFilterCount}</span>
+                {ratingFilter !== 'any' && (
+                  <button onClick={() => setRatingFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                    {ratingFilter === '4plus' ? '4+ stars' : '4.5+ stars'}
+                    <X size={11} />
+                  </button>
                 )}
-              </button>
-
-              {distanceFilter !== 'any' && (
-                <button onClick={() => setDistanceFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
-                  Within {distanceFilter === '1mi' ? '1 mi' : distanceFilter === '3mi' ? '3 mi' : '5 mi'}
-                  <X size={11} />
-                </button>
-              )}
-              {ratingFilter !== 'any' && (
-                <button onClick={() => setRatingFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
-                  {ratingFilter === '4plus' ? '4+ stars' : '4.5+ stars'}
-                  <X size={11} />
-                </button>
-              )}
-              {dietaryFilter.map(tag => (
-                <button key={tag} onClick={() => toggleDietaryTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
-                  {tag}
-                  <X size={11} />
-                </button>
-              ))}
-            </div>
-
-            {isFiltering && (
-              <div style={{ padding: '10px 20px 0', font: `400 12px ${font.sans}`, color: C.muted }}>
-                {filteredDishes.length === 0 ? 'No dishes match' : `${filteredDishes.length} result${filteredDishes.length === 1 ? '' : 's'}`}
+                {dietaryFilter.map(tag => (
+                  <button key={tag} onClick={() => toggleDietaryTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                    {tag}
+                    <X size={11} />
+                  </button>
+                ))}
               </div>
-            )}
 
-            {heroDish && (
-              <div style={{ padding: '16px 20px 0' }}>
-                <div onClick={() => openMeal(heroDish)} style={{ cursor: 'pointer', position: 'relative', borderRadius: 22, overflow: 'hidden', boxShadow: '0 8px 22px rgba(60,40,20,.16)' }}>
-                  <PhotoTile dish={heroDish} height={224} radius={0} />
-                  <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 36%,rgba(30,15,5,.76))' }} />
-                  <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 10px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
-                  <div style={{ position: 'absolute', left: 16, right: 16, bottom: 15, color: '#fff' }}>
-                    <div style={{ font: `500 22px/1.08 ${font.serif}` }}>{heroDish.name}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 12.5px ${font.sans}`, opacity: .95 }}>
-                      {heroDish.seller_photo_url ? (
-                        <span style={{ width: 23, height: 23, borderRadius: '50%', backgroundImage: `url(${heroDish.seller_photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-                      ) : (
-                        <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}` }}>{heroDish.seller_avatar}</span>
-                      )}
-                      {heroDish.seller_name}
-                      {(heroDish.review_count ?? 0) > 0 && (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                          · <Star size={12} fill={C.gold} color={C.gold} /> {Number(heroDish.avg_rating || 0).toFixed(1)}
-                        </span>
-                      )}
-                      {user.latitude != null && heroDish.seller_latitude != null && heroDish.seller_longitude != null && user.longitude != null && (
-                        <> · {distanceMiles(user.latitude, user.longitude, heroDish.seller_latitude, heroDish.seller_longitude).toFixed(1)} mi</>
-                      )}
+              {isFiltering && (
+                <div style={{ padding: '10px 20px 0', font: `400 12px ${font.sans}`, color: C.muted }}>
+                  {filteredDishes.length === 0 ? 'No dishes match' : `${filteredDishes.length} result${filteredDishes.length === 1 ? '' : 's'}`}
+                </div>
+              )}
+
+              {heroDish && (
+                <div style={{ padding: '16px 20px 0' }}>
+                  <div onClick={() => openMeal(heroDish)} style={{ cursor: 'pointer', position: 'relative', borderRadius: 22, overflow: 'hidden', boxShadow: '0 8px 22px rgba(60,40,20,.16)' }}>
+                    <PhotoTile dish={heroDish} height={224} radius={0} />
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 36%,rgba(30,15,5,.76))' }} />
+                    <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 10px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
+                    <div style={{ position: 'absolute', left: 16, right: 16, bottom: 15, color: '#fff' }}>
+                      <div style={{ font: `500 22px/1.08 ${font.serif}` }}>{heroDish.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 12.5px ${font.sans}`, opacity: .95 }}>
+                        {heroDish.seller_photo_url ? (
+                          <span style={{ width: 23, height: 23, borderRadius: '50%', backgroundImage: `url(${heroDish.seller_photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+                        ) : (
+                          <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}` }}>{heroDish.seller_avatar}</span>
+                        )}
+                        {heroDish.seller_name}
+                        {(heroDish.review_count ?? 0) > 0 && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                            · <Star size={12} fill={C.gold} color={C.gold} /> {Number(heroDish.avg_rating || 0).toFixed(1)}
+                          </span>
+                        )}
+                        {user.latitude != null && heroDish.seller_latitude != null && heroDish.seller_longitude != null && user.longitude != null && (
+                          <> · {distanceMiles(user.latitude, user.longitude, heroDish.seller_latitude, heroDish.seller_longitude).toFixed(1)} mi</>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
-              <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>{isFiltering ? 'Results' : 'Fresh from the block'}</div>
-              <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
-                <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  List
-                </button>
-                <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
-                  Map
-                </button>
-              </div>
-            </div>
-
-            {dishes.length === 0 && (
-              <div style={{ padding: '0 20px 8px', font: `400 12px ${font.sans}`, color: C.muted }}>No dishes yet</div>
-            )}
-            {isFiltering && filteredDishes.length === 0 && dishes.length > 0 && (
-              <div style={{ padding: '30px 24px', textAlign: 'center' }}>
-                <Search size={30} color={C.muted} style={{ opacity: .4, marginBottom: 10 }} />
-                <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 4 }}>No matches</div>
-                <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 12 }}>Try different keywords or clear a filter.</div>
-                {activeFilterCount > 0 && (
-                  <button onClick={clearFilters} style={{ padding: '8px 16px', background: C.terracotta, color: '#fff', borderRadius: 20, font: `500 12.5px ${font.sans}` }}>
-                    Clear filters
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
+                <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>{isFiltering ? 'Results' : 'Fresh from the block'}</div>
+                <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
+                  <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    List
                   </button>
-                )}
+                  <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    Map
+                  </button>
+                </div>
               </div>
-            )}
 
-            {feedView === 'map' ? (
-              <div style={{ padding: '0 20px 8px' }}>
-                <MapView
-                  height={380}
-                  radius={18}
-                  userLat={user.latitude}
-                  userLng={user.longitude}
-                  pins={(isFiltering ? filteredDishes : dishes)
-                    .filter(d => d.seller_latitude != null && d.seller_longitude != null)
-                    .map(d => ({
-                      id: d.id,
-                      lat: d.seller_latitude!,
-                      lng: d.seller_longitude!,
-                      photoUrl: d.photo_url,
-                      emoji: d.emoji,
-                      label: `$${Number(d.price).toFixed(0)}`,
-                      onClick: () => openMeal(d),
-                    }))}
-                />
-                {(isFiltering ? filteredDishes : dishes).filter(d => d.seller_latitude != null).length === 0 && dishes.length > 0 && (
-                  <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
-                    {isFiltering ? 'No dishes match your filters on the map.' : 'No cooks have shared a location yet. Ask cooks to enable location in their kitchen setup.'}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {otherDishes.map(dish => {
-                  const dist = (user.latitude != null && user.longitude != null && dish.seller_latitude != null && dish.seller_longitude != null)
-                    ? distanceMiles(user.latitude, user.longitude, dish.seller_latitude, dish.seller_longitude)
-                    : null;
-                  return (
-                    <div key={dish.id} onClick={() => openMeal(dish)} style={{ cursor: 'pointer', background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
-                      <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
-                        <PhotoTile dish={dish} height={96} radius={13} />
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                          <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
-                          <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
-                        </div>
-                        <a
-                          href={`/cook/${dish.seller_id}`}
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}`, textDecoration: 'none' }}
-                        >
-                          {dish.seller_photo_url ? (
-                            <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
-                          ) : (
-                            <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
-                          )}
-                          <span style={{ textDecoration: 'underline', textDecorationColor: 'transparent' }}>{dish.seller_name}</span>
-                        </a>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
-                          {dist !== null && (
-                            <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
-                          )}
-                          {dish.seller_kitchen_environment && (
-                            <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dish.seller_kitchen_environment}</span>
-                          )}
-                          <RatingChip dish={dish} size={11} />
-                          <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
-                        </div>
-                      </div>
+              {dishes.length === 0 && (
+                <div style={{ padding: '0 20px 8px', font: `400 12px ${font.sans}`, color: C.muted }}>No dishes yet</div>
+              )}
+              {isFiltering && filteredDishes.length === 0 && dishes.length > 0 && (
+                <div style={{ padding: '30px 24px', textAlign: 'center' }}>
+                  <Search size={30} color={C.muted} style={{ opacity: .4, marginBottom: 10 }} />
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 4 }}>No matches</div>
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 12 }}>Try different keywords or clear a filter.</div>
+                  {activeFilterCount > 0 && (
+                    <button onClick={clearFilters} style={{ padding: '8px 16px', background: C.terracotta, color: '#fff', borderRadius: 20, font: `500 12.5px ${font.sans}` }}>
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {feedView === 'map' ? (
+                <div style={{ padding: '0 20px 8px' }}>
+                  <MapView
+                    height={380}
+                    radius={18}
+                    userLat={user.latitude}
+                    userLng={user.longitude}
+                    pins={(isFiltering ? filteredDishes : dishes)
+                      .filter(d => d.seller_latitude != null && d.seller_longitude != null)
+                      .map(d => ({
+                        id: d.id,
+                        lat: d.seller_latitude!,
+                        lng: d.seller_longitude!,
+                        photoUrl: d.photo_url,
+                        emoji: d.emoji,
+                        label: `$${Number(d.price).toFixed(0)}`,
+                        onClick: () => openMeal(d),
+                      }))}
+                  />
+                  {(isFiltering ? filteredDishes : dishes).filter(d => d.seller_latitude != null).length === 0 && dishes.length > 0 && (
+                    <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
+                      {isFiltering ? 'No dishes match your filters on the map.' : 'No cooks have shared a location yet. Ask cooks to enable location in their kitchen setup.'}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div style={{ padding: '18px 20px 26px' }}>
-              {user && user.seller_status === 'approved' ? (
-                <div onClick={() => setScreen('seller-dashboard')} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Your kitchen</div>
-                    <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Manage your plates and orders.</div>
-                  </div>
-                  <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Open</div>
+                  )}
                 </div>
               ) : (
-                <div onClick={toggleSellerMode} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Are you a home cook?</div>
-                    <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
-                  </div>
-                  <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Start cooking</div>
+                <div style={{ padding: '0 20px 8px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {otherDishes.map(dish => {
+                    const dist = (user.latitude != null && user.longitude != null && dish.seller_latitude != null && dish.seller_longitude != null)
+                      ? distanceMiles(user.latitude, user.longitude, dish.seller_latitude, dish.seller_longitude)
+                      : null;
+                    return (
+                      <div key={dish.id} onClick={() => openMeal(dish)} style={{ cursor: 'pointer', background: C.card, borderRadius: 18, overflow: 'hidden', boxShadow: '0 3px 12px rgba(60,40,20,.07)', display: 'flex', gap: 13, padding: 11 }}>
+                        <div style={{ width: 96, height: 96, borderRadius: 13, overflow: 'hidden', flex: 'none' }}>
+                          <PhotoTile dish={dish} height={96} radius={13} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                            <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                            <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                          </div>
+                          <a
+                            href={`/cook/${dish.seller_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}`, textDecoration: 'none' }}
+                          >
+                            {dish.seller_photo_url ? (
+                              <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
+                            ) : (
+                              <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
+                            )}
+                            <span style={{ textDecoration: 'underline', textDecorationColor: 'transparent' }}>{dish.seller_name}</span>
+                          </a>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
+                            {dist !== null && (
+                              <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
+                            )}
+                            {dish.seller_kitchen_environment && (
+                              <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dish.seller_kitchen_environment}</span>
+                            )}
+                            <RatingChip dish={dish} size={11} />
+                            <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-            </div>
 
-            {/* Legal footer */}
-            <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
-              <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
-              <span>·</span>
-              <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
-              <span>·</span>
-              <span>© Plates {new Date().getFullYear()}</span>
-            </div>
+              <div style={{ padding: '18px 20px 26px' }}>
+                {user && user.seller_status === 'approved' ? (
+                  <div onClick={() => setScreen('seller-dashboard')} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Your kitchen</div>
+                      <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Manage your plates and orders.</div>
+                    </div>
+                    <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Open</div>
+                  </div>
+                ) : (
+                  <div onClick={toggleSellerMode} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Are you a home cook?</div>
+                      <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
+                    </div>
+                    <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Start cooking</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Legal footer */}
+              <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
+                <span>·</span>
+                <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
+                <span>·</span>
+                <span>© Plates {new Date().getFullYear()}</span>
+              </div>
             </>)}
 
             {/* ================= COMMUNITY FEED (inside Discover screen) ================= */}
@@ -2820,16 +2847,16 @@ export default function Home() {
                       )}
                       {selectedDish.seller_kitchen_flags && selectedDish.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).map(flag => (
                         <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
-                        {flag.charAt(0).toUpperCase() + flag.slice(1).replace('-', ' ')}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {selectedDish.seller_pickup_description && (
-                  <div style={{ marginTop: 12, padding: '10px 12px', background: C.surface, borderRadius: 10, font: `400 12.5px ${font.sans}`, color: C.inkSoft }}>
-                    <span style={{ color: C.muted }}>Pickup: </span>{selectedDish.seller_pickup_description}
-                  </div>
-                )}
+                          {flag.charAt(0).toUpperCase() + flag.slice(1).replace('-', ' ')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {selectedDish.seller_pickup_description && (
+                    <div style={{ marginTop: 12, padding: '10px 12px', background: C.surface, borderRadius: 10, font: `400 12.5px ${font.sans}`, color: C.inkSoft }}>
+                      <span style={{ color: C.muted }}>Pickup: </span>{selectedDish.seller_pickup_description}
+                    </div>
+                  )}
                 </div>
               </a>
 
@@ -2939,34 +2966,34 @@ export default function Home() {
           </div>
         )}
         {/* ================= CHECKOUT PAYMENT ================= */}
-          {screen === 'checkout-payment' && (
-            <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
-              <div style={{ padding: '20px 22px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <button
-                  onClick={() => setScreen('cart')}
-                  style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink, border: 'none', cursor: 'pointer' }}
-                >
-                  ‹
-                </button>
-                <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Payment</div>
-              </div>
-              <div style={{ padding: '0 22px' }}>
-                <div style={{ background: C.card, borderRadius: 14, padding: 18, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                  {checkoutError && (
-                    <div style={{ marginBottom: 14, padding: 10, background: '#fceded', border: '1px solid #f5b8b8', borderRadius: 10, color: '#8a2a2a', fontSize: 13 }}>
-                      {checkoutError}
-                    </div>
-                  )}
-                  <CheckoutPayment
-                    clientSecrets={checkoutSecrets}
-                    totalLabel={checkoutTotalLabel}
-                    onSuccess={finalizeOrder}
-                    onCancel={() => setScreen('cart')}
-                  />
-                </div>
+        {screen === 'checkout-payment' && (
+          <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
+            <div style={{ padding: '20px 22px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button
+                onClick={() => setScreen('cart')}
+                style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink, border: 'none', cursor: 'pointer' }}
+              >
+                ‹
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Payment</div>
+            </div>
+            <div style={{ padding: '0 22px' }}>
+              <div style={{ background: C.card, borderRadius: 14, padding: 18, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                {checkoutError && (
+                  <div style={{ marginBottom: 14, padding: 10, background: '#fceded', border: '1px solid #f5b8b8', borderRadius: 10, color: '#8a2a2a', fontSize: 13 }}>
+                    {checkoutError}
+                  </div>
+                )}
+                <CheckoutPayment
+                  clientSecrets={checkoutSecrets}
+                  totalLabel={checkoutTotalLabel}
+                  onSuccess={finalizeOrder}
+                  onCancel={() => setScreen('cart')}
+                />
               </div>
             </div>
-          )}
+          </div>
+        )}
         {/* ================= CART ================= */}
         {screen === 'cart' && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
@@ -3274,44 +3301,44 @@ export default function Home() {
               <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Your kitchen</div>
             </div>
             {user.seller_status === 'approved' && earnings && (
-                <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.05em' }}>Earnings</div>
+              <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.05em' }}>Earnings</div>
 
-                  <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-                    <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 12 }}>
-                      <div style={{ font: `600 20px ${font.serif}`, color: C.green }}>${Number(earnings.earnings?.summary?.total_earnings || 0).toFixed(2)}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Total earned</div>
-                    </div>
-                    <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
-                      <div style={{ font: `600 20px ${font.serif}`, color: C.ink }}>{earnings.earnings?.summary?.order_count || 0}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
-                    </div>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                  <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 12 }}>
+                    <div style={{ font: `600 20px ${font.serif}`, color: C.green }}>${Number(earnings.earnings?.summary?.total_earnings || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Total earned</div>
                   </div>
-
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.available || 0).toFixed(2)}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to pay out</div>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.pending || 0).toFixed(2)}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending in Stripe</div>
-                    </div>
+                  <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
+                    <div style={{ font: `600 20px ${font.serif}`, color: C.ink }}>{earnings.earnings?.summary?.order_count || 0}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
                   </div>
-
-                  {earnings.stripe?.payouts?.length > 0 && (
-                    <div style={{ marginTop: 14, borderTop: `1px solid ${C.divider}`, paddingTop: 12 }}>
-                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent payouts</div>
-                      {earnings.stripe.payouts.slice(0, 5).map((p: any) => (
-                        <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
-                          <span>${Number(p.amount).toFixed(2)}</span>
-                          <span style={{ color: C.muted }}>{p.status}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
-              )}
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.available || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to pay out</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.pending || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending in Stripe</div>
+                  </div>
+                </div>
+
+                {earnings.stripe?.payouts?.length > 0 && (
+                  <div style={{ marginTop: 14, borderTop: `1px solid ${C.divider}`, paddingTop: 12 }}>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent payouts</div>
+                    {earnings.stripe.payouts.slice(0, 5).map((p: any) => (
+                      <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
+                        <span>${Number(p.amount).toFixed(2)}</span>
+                        <span style={{ color: C.muted }}>{p.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {user.seller_status === 'pending' && (
               <div style={{ background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 14, padding: 14, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: '#b8860b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
@@ -3951,12 +3978,12 @@ export default function Home() {
 
         {/* ================= KITCHEN QUEUE (cook) ================= */}
         {screen === 'kitchen-queue' && user && !user.is_seller ? (
-  <div style={{ animation: 'plfade .3s ease', paddingBottom: 100, padding: '60px 22px', textAlign: 'center' }}>
-    <div style={{ font: `500 20px ${font.serif}`, color: C.ink, marginBottom: 8 }}>Seller mode is off</div>
-    <div style={{ font: `400 13.5px ${font.sans}`, color: C.muted, marginBottom: 20 }}>Turn on seller mode to access your kitchen and manage orders.</div>
-    <button onClick={toggleSellerMode} style={{ padding: '12px 20px', background: C.green, color: '#fff', border: 'none', borderRadius: 10, font: `500 14px ${font.sans}`, cursor: 'pointer' }}>Turn on seller mode</button>
-  </div>
-) : screen === 'kitchen-queue' && (
+          <div style={{ animation: 'plfade .3s ease', paddingBottom: 100, padding: '60px 22px', textAlign: 'center' }}>
+            <div style={{ font: `500 20px ${font.serif}`, color: C.ink, marginBottom: 8 }}>Seller mode is off</div>
+            <div style={{ font: `400 13.5px ${font.sans}`, color: C.muted, marginBottom: 20 }}>Turn on seller mode to access your kitchen and manage orders.</div>
+            <button onClick={toggleSellerMode} style={{ padding: '12px 20px', background: C.green, color: '#fff', border: 'none', borderRadius: 10, font: `500 14px ${font.sans}`, cursor: 'pointer' }}>Turn on seller mode</button>
+          </div>
+        ) : screen === 'kitchen-queue' && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
             <div style={{ padding: '20px 22px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               <button onClick={() => setScreen('seller-dashboard')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
@@ -4055,6 +4082,28 @@ export default function Home() {
                               Cancel
                             </button>
                           </div>
+                        ) : confirmingCookCancelFor === o.id ? (
+                          <div style={{ marginTop: 12 }}>
+                            <div style={{ font: `500 12px ${font.sans}`, color: C.inkSoft, marginBottom: 10 }}>
+                              Cancel this order? The buyer will be refunded automatically.
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button
+                                onClick={() => setConfirmingCookCancelFor(null)}
+                                disabled={cookCancelSubmitting}
+                                style={{ flex: 1, background: 'transparent', border: `1px solid ${C.divider}`, color: C.inkSoft, borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}
+                              >
+                                Keep order
+                              </button>
+                              <button
+                                onClick={() => cookCancelOrder(o.id)}
+                                disabled={cookCancelSubmitting}
+                                style={{ flex: 1, background: '#c94b4b', color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}
+                              >
+                                {cookCancelSubmitting ? 'Cancelling…' : 'Cancel & refund'}
+                              </button>
+                            </div>
+                          </div>
                         ) : (
                           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                             {o.status === 'placed' && (
@@ -4064,10 +4113,16 @@ export default function Home() {
                               </>
                             )}
                             {o.status === 'accepted' && (
-                              <button onClick={() => updateOrderStatus(o.id, 'cooking')} style={{ flex: 1, background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Start cooking</button>
+                              <>
+                                <button onClick={() => updateOrderStatus(o.id, 'cooking')} style={{ flex: 1, background: C.terracotta, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Start cooking</button>
+                                <button onClick={() => setConfirmingCookCancelFor(o.id)} style={{ flex: 'none', width: 40, height: 40, borderRadius: 10, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                              </>
                             )}
                             {o.status === 'cooking' && (
-                              <button onClick={() => updateOrderStatus(o.id, 'ready')} style={{ flex: 1, background: C.green, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Mark ready</button>
+                              <>
+                                <button onClick={() => updateOrderStatus(o.id, 'ready')} style={{ flex: 1, background: C.green, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Mark ready</button>
+                                <button onClick={() => setConfirmingCookCancelFor(o.id)} style={{ flex: 'none', width: 40, height: 40, borderRadius: 10, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                              </>
                             )}
                             {o.status === 'ready' && (
                               <button onClick={() => openPickupConfirmation(o.id)} style={{ flex: 1, background: C.ink, color: '#fff', borderRadius: 10, padding: 10, font: `500 12px ${font.sans}` }}>Enter pickup code</button>
@@ -4284,64 +4339,64 @@ export default function Home() {
             )}
 
             {adminFinancials && (
-                <div style={{ marginBottom: 20 }}>
-                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Financials</div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Financials</div>
 
-                  <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-                    <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14 }}>
-                      <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(adminFinancials.totals?.platform_revenue || 0).toFixed(2)}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Platform revenue</div>
-                    </div>
-                    <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14 }}>
-                      <div style={{ font: `600 22px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.gross_sales || 0).toFixed(2)}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Gross sales</div>
-                    </div>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                  <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14 }}>
+                    <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(adminFinancials.totals?.platform_revenue || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Platform revenue</div>
                   </div>
-
-                  <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-                    <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                      <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.cook_payouts || 0).toFixed(2)}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Cook payouts</div>
-                    </div>
-                    <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                      <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>{adminFinancials.totals?.order_count || 0}</div>
-                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
-                    </div>
+                  <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14 }}>
+                    <div style={{ font: `600 22px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.gross_sales || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Gross sales</div>
                   </div>
-
-                  {adminFinancials.topCooks?.length > 0 && (
-                    <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Top cooks by sales</div>
-                      {adminFinancials.topCooks.slice(0, 5).map((c: any) => (
-                        <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${C.hairline}` }}>
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ font: `500 13px ${font.sans}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.kitchen_name || c.name}</div>
-                            <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{c.order_count} orders</div>
-                          </div>
-                          <div style={{ textAlign: 'right', flex: 'none' }}>
-                            <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>${Number(c.gross_sales).toFixed(2)}</div>
-                            <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>+${Number(c.platform_revenue).toFixed(2)} fee</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {adminFinancials.trend?.length > 0 && (
-                    <div style={{ background: C.card, borderRadius: 14, padding: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Last 30 days</div>
-                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 80 }}>
-                        {(() => {
-                          const max = Math.max(...adminFinancials.trend.map((d: any) => Number(d.sales)), 1);
-                          return adminFinancials.trend.map((d: any, i: number) => (
-                            <div key={i} title={`${d.day}: $${Number(d.sales).toFixed(2)}`} style={{ flex: 1, background: C.green, borderRadius: 2, height: `${Math.max(4, (Number(d.sales) / max) * 80)}px`, opacity: 0.7 }} />
-                          ));
-                        })()}
-                      </div>
-                    </div>
-                  )}
                 </div>
+
+                <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                  <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.cook_payouts || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Cook payouts</div>
+                  </div>
+                  <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>{adminFinancials.totals?.order_count || 0}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
+                  </div>
+                </div>
+
+                {adminFinancials.topCooks?.length > 0 && (
+                  <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Top cooks by sales</div>
+                    {adminFinancials.topCooks.slice(0, 5).map((c: any) => (
+                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${C.hairline}` }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ font: `500 13px ${font.sans}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.kitchen_name || c.name}</div>
+                          <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{c.order_count} orders</div>
+                        </div>
+                        <div style={{ textAlign: 'right', flex: 'none' }}>
+                          <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>${Number(c.gross_sales).toFixed(2)}</div>
+                          <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>+${Number(c.platform_revenue).toFixed(2)} fee</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
+
+                {adminFinancials.trend?.length > 0 && (
+                  <div style={{ background: C.card, borderRadius: 14, padding: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Last 30 days</div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 80 }}>
+                      {(() => {
+                        const max = Math.max(...adminFinancials.trend.map((d: any) => Number(d.sales)), 1);
+                        return adminFinancials.trend.map((d: any, i: number) => (
+                          <div key={i} title={`${d.day}: $${Number(d.sales).toFixed(2)}`} style={{ flex: 1, background: C.green, borderRadius: 2, height: `${Math.max(4, (Number(d.sales) / max) * 80)}px`, opacity: 0.7 }} />
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 14 }}>
               {[
@@ -4569,9 +4624,11 @@ export default function Home() {
                     <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</div>
                     <div style={{ display: 'flex', gap: 5, marginTop: 5, flexWrap: 'wrap' }}>
                       {u.seller_status !== 'not_seller' && (
-                        <span style={{ padding: '2px 7px', borderRadius: 6, font: `500 10px ${font.sans}`,
+                        <span style={{
+                          padding: '2px 7px', borderRadius: 6, font: `500 10px ${font.sans}`,
                           background: u.seller_status === 'approved' ? C.greenLight : u.seller_status === 'pending' ? '#fff9e6' : '#fceded',
-                          color: u.seller_status === 'approved' ? C.green : u.seller_status === 'pending' ? '#7a5c0b' : '#8a2a2a' }}>
+                          color: u.seller_status === 'approved' ? C.green : u.seller_status === 'pending' ? '#7a5c0b' : '#8a2a2a'
+                        }}>
                           {u.seller_status}
                         </span>
                       )}
