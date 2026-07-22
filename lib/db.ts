@@ -859,6 +859,53 @@ export async function getAdminUserOrders(userId: number) {
   `;
   return result.rows;
 }
+// Financial + volume stats for the admin dashboard.
+export async function getAdminFinancials() {
+  // Platform revenue + volume from non-cancelled orders
+  const totals = await sql`
+    SELECT
+      COALESCE(SUM(o.total_price), 0) as gross_sales,
+      COALESCE(SUM(o.platform_fee), 0) as platform_revenue,
+      COALESCE(SUM(o.cook_earnings), 0) as cook_payouts,
+      COUNT(*)::int as order_count
+    FROM orders o
+    WHERE o.status != 'cancelled'
+  `;
+
+  // Top cooks by revenue they've generated for the platform
+  const topCooks = await sql`
+    SELECT u.id, u.name, u.kitchen_name,
+           COUNT(o.id)::int as order_count,
+           COALESCE(SUM(o.total_price), 0) as gross_sales,
+           COALESCE(SUM(o.platform_fee), 0) as platform_revenue
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    JOIN users u ON d.seller_id = u.id
+    WHERE o.status != 'cancelled'
+    GROUP BY u.id, u.name, u.kitchen_name
+    ORDER BY gross_sales DESC
+    LIMIT 10
+  `;
+
+  // Daily trend for the last 30 days
+  const trend = await sql`
+    SELECT DATE(o.created_at) as day,
+           COUNT(*)::int as orders,
+           COALESCE(SUM(o.total_price), 0) as sales,
+           COALESCE(SUM(o.platform_fee), 0) as revenue
+    FROM orders o
+    WHERE o.status != 'cancelled'
+      AND o.created_at >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY DATE(o.created_at)
+    ORDER BY day ASC
+  `;
+
+  return {
+    totals: totals.rows[0],
+    topCooks: topCooks.rows,
+    trend: trend.rows,
+  };
+}
 
 // ============= REVIEWS =============
 

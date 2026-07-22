@@ -392,6 +392,7 @@ export default function Home() {
 
   // Admin state
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
+  const [adminFinancials, setAdminFinancials] = useState<any>(null);
   const [adminPending, setAdminPending] = useState<any[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
   const [adminUserFilter, setAdminUserFilter] = useState<'all' | 'pending' | 'sellers' | 'suspended' | 'admins' | 'disabled'>('all');
@@ -532,7 +533,16 @@ export default function Home() {
       }
     } catch (e) { console.error('Admin stats error:', e); }
   };
-
+  const loadAdminFinancials = async () => {
+      try {
+        const res = await fetch('/api/admin?action=financials');
+        if (!res.ok) return;
+        const data = await res.json();
+        setAdminFinancials(data);
+      } catch (e) {
+        console.error('Load admin financials error:', e);
+      }
+  };
   const loadAdminPending = async () => {
     try {
       const res = await fetch('/api/admin?action=pending');
@@ -1231,6 +1241,7 @@ export default function Home() {
   useEffect(() => {
     if (!user || user.role !== 'admin') return;
     if (screen === 'admin') loadAdminStats();
+    if (screen === 'admin') loadAdminFinancials();
     if (screen === 'admin-pending') loadAdminPending();
     if (screen === 'admin-users') loadAdminUsers();
     if (screen === 'admin-dishes') loadAdminDishes();
@@ -4271,6 +4282,66 @@ export default function Home() {
                 <ChevronRight size={20} />
               </div>
             )}
+
+            {adminFinancials && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Financials</div>
+
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                    <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14 }}>
+                      <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(adminFinancials.totals?.platform_revenue || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Platform revenue</div>
+                    </div>
+                    <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14 }}>
+                      <div style={{ font: `600 22px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.gross_sales || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Gross sales</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                    <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                      <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.cook_payouts || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Cook payouts</div>
+                    </div>
+                    <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                      <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>{adminFinancials.totals?.order_count || 0}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
+                    </div>
+                  </div>
+
+                  {adminFinancials.topCooks?.length > 0 && (
+                    <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Top cooks by sales</div>
+                      {adminFinancials.topCooks.slice(0, 5).map((c: any) => (
+                        <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${C.hairline}` }}>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ font: `500 13px ${font.sans}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.kitchen_name || c.name}</div>
+                            <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{c.order_count} orders</div>
+                          </div>
+                          <div style={{ textAlign: 'right', flex: 'none' }}>
+                            <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>${Number(c.gross_sales).toFixed(2)}</div>
+                            <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>+${Number(c.platform_revenue).toFixed(2)} fee</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {adminFinancials.trend?.length > 0 && (
+                    <div style={{ background: C.card, borderRadius: 14, padding: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Last 30 days</div>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 80 }}>
+                        {(() => {
+                          const max = Math.max(...adminFinancials.trend.map((d: any) => Number(d.sales)), 1);
+                          return adminFinancials.trend.map((d: any, i: number) => (
+                            <div key={i} title={`${d.day}: $${Number(d.sales).toFixed(2)}`} style={{ flex: 1, background: C.green, borderRadius: 2, height: `${Math.max(4, (Number(d.sales) / max) * 80)}px`, opacity: 0.7 }} />
+                          ));
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 14 }}>
               {[

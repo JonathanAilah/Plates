@@ -14,6 +14,7 @@ import {
   adminDeleteDish,
   getAdminStats,
   getAdminUserOrders,
+  getAdminFinancials,
 } from '@/lib/db';
 
 function errorResponse(error: any) {
@@ -58,6 +59,11 @@ export async function GET(request: NextRequest) {
       if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 });
       const orders = await getAdminUserOrders(userId);
       return NextResponse.json(orders);
+    }
+
+    if (action === 'financials') {
+        const financials = await getAdminFinancials();
+        return NextResponse.json(financials);
     }
 
     if (action === 'dishes') {
