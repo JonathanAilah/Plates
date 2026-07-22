@@ -7,4 +7,4 @@ if (!process.env.STRIPE_SECRET_KEY) {
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2026-06-24.dahlia',
 });
-export const PLATES_FEE_PERCENT = 0.15; // adjust to your actual take rate
+export { PLATES_FEE_PERCENT } from './fees';

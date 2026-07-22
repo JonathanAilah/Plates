@@ -344,6 +344,7 @@ export default function Home() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [tipAmount, setTipAmount] = useState(3);
   const [tipEditing, setTipEditing] = useState(false);
+  const [earnings, setEarnings] = useState<any>(null);
   const [connectingStripe, setConnectingStripe] = useState(false);
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
   const [toast, setToast] = useState<string | null>(null);
@@ -486,7 +487,16 @@ export default function Home() {
       console.error('Cook orders load error:', e);
     }
   };
-
+      const loadEarnings = async () => {
+      try {
+        const res = await fetch('/api/stripe/earnings');
+        if (!res.ok) return;
+        const data = await res.json();
+        setEarnings(data);
+      } catch (e) {
+        console.error('Load earnings error:', e);
+      }
+    };
   const loadMessages = async (orderId: string, userId: number) => {
     try {
       const res = await fetch(`/api/messages?action=list&orderId=${orderId}&userId=${userId}`);
@@ -1131,6 +1141,12 @@ export default function Home() {
     };
     initApp();
   }, []);
+
+  useEffect(() => {
+      if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
+        loadEarnings();
+      }
+    }, [screen, user?.seller_status]);
 
   // Poll orders when on orders / order-detail / kitchen-queue screens
   useEffect(() => {
@@ -3246,7 +3262,45 @@ export default function Home() {
               </button>
               <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Your kitchen</div>
             </div>
+            {user.seller_status === 'approved' && earnings && (
+                <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.05em' }}>Earnings</div>
 
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                    <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 12 }}>
+                      <div style={{ font: `600 20px ${font.serif}`, color: C.green }}>${Number(earnings.earnings?.summary?.total_earnings || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Total earned</div>
+                    </div>
+                    <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
+                      <div style={{ font: `600 20px ${font.serif}`, color: C.ink }}>{earnings.earnings?.summary?.order_count || 0}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.available || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to pay out</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.pending || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending in Stripe</div>
+                    </div>
+                  </div>
+
+                  {earnings.stripe?.payouts?.length > 0 && (
+                    <div style={{ marginTop: 14, borderTop: `1px solid ${C.divider}`, paddingTop: 12 }}>
+                      <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent payouts</div>
+                      {earnings.stripe.payouts.slice(0, 5).map((p: any) => (
+                        <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
+                          <span>${Number(p.amount).toFixed(2)}</span>
+                          <span style={{ color: C.muted }}>{p.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             {user.seller_status === 'pending' && (
               <div style={{ background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 14, padding: 14, marginBottom: 14, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: '#b8860b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>

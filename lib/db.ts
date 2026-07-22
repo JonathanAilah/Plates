@@ -1,4 +1,5 @@
 import { sql } from '@vercel/postgres';
+import { PLATES_FEE_PERCENT } from './fees';
 
 export async function initializeDatabase() {
   try {
@@ -54,6 +55,10 @@ export async function initializeDatabase() {
     // Stripe payments (orders)
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_payment_intent ON orders(stripe_payment_intent_id)`;
+    // Accounting: fee breakdown per order (stored at checkout so historical
+    // orders keep original numbers even if the fee rate changes later)
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS platform_fee DECIMAL(10, 2)`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cook_earnings DECIMAL(10, 2)`;
     // Backfill: any user who is currently is_seller=true should be treated as approved
     await sql`UPDATE users SET seller_status = 'approved' WHERE is_seller = true AND seller_status = 'not_seller'`;
 
@@ -500,7 +505,31 @@ export async function getCart(buyerId: number) {
   `;
   return result.rows;
 }
-
+// Cook earnings summary from orders (excludes cancelled).
+export async function getCookEarnings(sellerId: number) {
+  const summary = await sql`
+    SELECT
+      COALESCE(SUM(o.cook_earnings), 0) as total_earnings,
+      COALESCE(SUM(o.total_price), 0) as total_sales,
+      COALESCE(SUM(o.platform_fee), 0) as total_fees,
+      COUNT(*)::int as order_count
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${sellerId}
+      AND o.status != 'cancelled'
+  `;
+  const recent = await sql`
+    SELECT o.id, o.total_price, o.cook_earnings, o.platform_fee, o.status, o.created_at,
+           d.name as dish_name, d.emoji as dish_emoji
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${sellerId}
+      AND o.status != 'cancelled'
+    ORDER BY o.created_at DESC
+    LIMIT 20
+  `;
+  return { summary: summary.rows[0], recent: recent.rows };
+}
 export async function addToCart(buyerId: number, dishId: number, quantity: number) {
   const result = await sql`
     INSERT INTO cart_items (buyer_id, dish_id, quantity)
