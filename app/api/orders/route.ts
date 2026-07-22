@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@vercel/postgres';
 import { createOrder, getOrders, updateOrderStatus, getSellerOrders, cookCancelOrder, buyerCancelOrder } from '@/lib/db';
 import { requireSessionUser } from '@/lib/auth';
+import { sendPushToUser } from '@/lib/push';
 
 function errorResponse(error: any) {
   const status = error?.status || 500;
@@ -39,9 +40,28 @@ export async function POST(request: NextRequest) {
     const { action, orderId, status, pickupCode } = body;
 
     if (action === 'create') {
-      const order = await createOrder(me.id, body.dishId, body.quantity, body.totalPrice);
-      return NextResponse.json(order);
+  const order = await createOrder(me.id, body.dishId, body.quantity, body.totalPrice);
+
+  // Notify the cook of the new order. Failures here should never
+  // block the order itself from succeeding.
+  try {
+    const dishInfo = await sql`
+      SELECT d.name, d.seller_id FROM dishes d WHERE d.id = ${body.dishId}
+    `;
+    const dish = dishInfo.rows[0];
+    if (dish) {
+      await sendPushToUser(dish.seller_id, {
+        title: 'New order!',
+        body: `${me.name} ordered ${order.quantity}x ${dish.name}`,
+        url: '/',
+      });
     }
+  } catch (error) {
+    console.error('Push notification error:', error);
+  }
+
+  return NextResponse.json(order);
+}
 
     if (action === 'updateStatus') {
       const valid = ['placed', 'accepted', 'cooking', 'ready', 'picked_up', 'cancelled'];
