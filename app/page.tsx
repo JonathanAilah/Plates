@@ -696,7 +696,7 @@ export default function Home() {
       setAdminSelectedUserOrders([]);
     }
   };
-  
+
   const adminSetRole = async (userId: number, role: 'user' | 'admin') => {
     const result = await adminAction({ action: 'setRole', userId, role });
     if (result) {
@@ -4878,6 +4878,48 @@ export default function Home() {
                   <button onClick={() => adminSetRole(u.id, u.role === 'admin' ? 'user' : 'admin')} disabled={adminActionSubmitting} style={{ width: '100%', padding: 10, background: u.role === 'admin' ? '#fceded' : C.ink, color: u.role === 'admin' ? '#8a2a2a' : '#fff', border: u.role === 'admin' ? `1px solid #f5b8b8` : 'none', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
                     <Shield size={14} /> {u.role === 'admin' ? 'Remove admin' : 'Promote to admin'}
                   </button>
+                 {adminDeleteConfirmingFor !== u.id ? (
+                    <button
+                      onClick={() => { setAdminDeleteConfirmingFor(u.id); setAdminDeleteChecked(false); }}
+                      disabled={adminActionSubmitting}
+                      style={{ width: '100%', padding: 10, background: '#c0392b', color: '#fff', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    >
+                      <Trash2 size={14} /> Delete user permanently
+                    </button>
+                  ) : (
+                    <div style={{ background: '#fff5f5', border: '1px solid #c0392b', borderRadius: 10, padding: 12 }}>
+                      <div style={{ font: `500 13px ${font.sans}`, color: '#c0392b', marginBottom: 8 }}>
+                        Delete {u.name || u.email}?
+                      </div>
+                      <div style={{ font: `400 12px ${font.sans}`, color: C.ink, marginBottom: 10, lineHeight: 1.4 }}>
+                        This permanently deletes their profile, dishes, posts, and photos. Any open orders will be refunded. Paid/completed orders are preserved for accounting.
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, cursor: 'pointer', font: `400 12px ${font.sans}`, color: C.ink }}>
+                        <input
+                          type="checkbox"
+                          checked={adminDeleteChecked}
+                          onChange={(e) => setAdminDeleteChecked(e.target.checked)}
+                        />
+                        I understand this is permanent
+                      </label>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                          onClick={() => { setAdminDeleteConfirmingFor(null); setAdminDeleteChecked(false); }}
+                          disabled={adminActionSubmitting}
+                          style={{ flex: 1, padding: 8, background: C.cardAlt, color: C.ink, borderRadius: 8, font: `500 12px ${font.sans}` }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => adminDeleteUser(u.id)}
+                          disabled={!adminDeleteChecked || adminActionSubmitting}
+                          style={{ flex: 2, padding: 8, background: '#c0392b', color: '#fff', borderRadius: 8, font: `500 12px ${font.sans}`, opacity: (!adminDeleteChecked || adminActionSubmitting) ? 0.5 : 1 }}
+                        >
+                          {adminActionSubmitting ? 'Deleting…' : 'Delete permanently'}
+                        </button>
+                      </div>
+                    </div>
+                  )} 
                 </div>
               )}
 
