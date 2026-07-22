@@ -2415,13 +2415,23 @@ export default function Home() {
             )}
 
             <div style={{ padding: '18px 20px 26px' }}>
-              <div onClick={toggleSellerMode} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Are you a home cook?</div>
-                  <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
+              {user && user.seller_status === 'approved' ? (
+                <div onClick={() => setScreen('seller-dashboard')} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Your kitchen</div>
+                    <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Manage your plates and orders.</div>
+                  </div>
+                  <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Open</div>
                 </div>
-                <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>{user.is_seller ? 'Kitchen' : 'Start cooking'}</div>
-              </div>
+              ) : (
+                <div onClick={toggleSellerMode} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Are you a home cook?</div>
+                    <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
+                  </div>
+                  <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Start cooking</div>
+                </div>
+              )}
             </div>
 
             {/* Legal footer */}
