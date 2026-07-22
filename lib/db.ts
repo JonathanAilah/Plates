@@ -587,6 +587,141 @@ export async function buyerCancelOrder(orderId: string, buyerId: number) {
   }
   return refundAndCancelOrder(orderId, row.stripe_payment_intent_id);
 }
+// ============= ADMIN: HARD DELETE USER =============
+// Erases a user and all their non-financial data. Preserves the money trail
+// (orders, Stripe IDs, fees) by snapshotting name/email/dish onto the order
+// and nulling the FK. If the user is a seller with open orders, all open
+// orders are refunded + cancelled BEFORE deletion.
+//
+// Returns the list of Vercel Blob URLs that need to be deleted from Blob
+// storage; the caller handles Blob cleanup after this function returns,
+// since Blob deletion isn't part of the DB transaction.
+//
+// Throws if the user doesn't exist, is the last admin, or if any refund fails.
+export async function deleteUserCompletely(userId: number): Promise<{
+  deletedUserEmail: string;
+  blobUrlsToDelete: string[];
+  refundedOrderCount: number;
+  preservedOrderCount: number;
+}> {
+  // 1. Load user + safety checks
+  const userRows = await sql`SELECT id, name, email, role, photo_url FROM users WHERE id = ${userId} LIMIT 1`;
+  const user = userRows.rows[0];
+  if (!user) {
+    const e: any = new Error('User not found');
+    e.status = 404;
+    throw e;
+  }
+  if (user.role === 'admin') {
+    const adminCount = await sql`SELECT COUNT(*)::int AS c FROM users WHERE role = 'admin'`;
+    if (adminCount.rows[0].c <= 1) {
+      const e: any = new Error('Cannot delete the last admin');
+      e.status = 400;
+      throw e;
+    }
+  }
+
+  // 2. If the user is a seller, refund + cancel every open order on their dishes.
+  //    Open = anything not terminal (not cancelled, not picked_up).
+  const openSellerOrders = await sql`
+    SELECT o.id, o.stripe_payment_intent_id
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${userId}
+      AND o.status NOT IN ('cancelled', 'picked_up')
+  `;
+  for (const row of openSellerOrders.rows) {
+    await refundAndCancelOrder(row.id, row.stripe_payment_intent_id);
+  }
+  const refundedOrderCount = openSellerOrders.rows.length;
+
+  // 3. Also refund the user's OWN open orders where they're the buyer
+  //    (a rare case if they were both buyer + seller, but safe).
+  const openBuyerOrders = await sql`
+    SELECT id, stripe_payment_intent_id
+    FROM orders
+    WHERE buyer_id = ${userId}
+      AND status NOT IN ('cancelled', 'picked_up')
+  `;
+  for (const row of openBuyerOrders.rows) {
+    await refundAndCancelOrder(row.id, row.stripe_payment_intent_id);
+  }
+  const totalRefunded = refundedOrderCount + openBuyerOrders.rows.length;
+
+  // 4. Snapshot buyer name/email onto every order they placed, so accounting
+  //    still reads. buyer_id will be nulled by the FK ON DELETE SET NULL
+  //    when the user row is deleted below.
+  await sql`
+    UPDATE orders
+       SET buyer_name_snapshot  = ${user.name},
+           buyer_email_snapshot = ${user.email},
+           deleted_at           = CURRENT_TIMESTAMP
+     WHERE buyer_id = ${userId}
+  `;
+
+  // 5. Snapshot dish name/price onto every order for their dishes, so the
+  //    money row survives after dishes are deleted below.
+  await sql`
+    UPDATE orders
+       SET dish_name_snapshot  = d.name,
+           dish_price_snapshot = d.price,
+           deleted_at          = COALESCE(orders.deleted_at, CURRENT_TIMESTAMP)
+      FROM dishes d
+     WHERE orders.dish_id = d.id
+       AND d.seller_id = ${userId}
+  `;
+
+  // 6. Collect Blob URLs we'll need to delete from storage AFTER db work.
+  //    Three columns hold Blob URLs: users.photo_url, dishes.photo_url, posts.photo_url.
+  const blobUrls: string[] = [];
+  if (user.photo_url) blobUrls.push(user.photo_url);
+
+  const dishPhotos = await sql`
+    SELECT photo_url FROM dishes WHERE seller_id = ${userId} AND photo_url IS NOT NULL
+  `;
+  for (const row of dishPhotos.rows) blobUrls.push(row.photo_url);
+
+  const postPhotos = await sql`
+    SELECT photo_url FROM posts WHERE user_id = ${userId} AND photo_url IS NOT NULL
+  `;
+  for (const row of postPhotos.rows) blobUrls.push(row.photo_url);
+
+  // 7. Delete dependent rows that we don't need to preserve.
+  //    Order matters: children of dishes/posts before dishes/posts themselves.
+  //    Skip 'orders' — those are preserved via SET NULL + snapshots.
+  //    Skip 'messages' — will keep those tied to preserved orders (sender_id
+  //    stays as it is; if you'd rather null it, we can add a snapshot later).
+  await sql`DELETE FROM dish_reviews  WHERE buyer_id = ${userId} OR dish_id IN (SELECT id FROM dishes WHERE seller_id = ${userId})`;
+  await sql`DELETE FROM dish_likes    WHERE user_id  = ${userId} OR dish_id IN (SELECT id FROM dishes WHERE seller_id = ${userId})`;
+  await sql`DELETE FROM cart_items    WHERE buyer_id = ${userId} OR dish_id IN (SELECT id FROM dishes WHERE seller_id = ${userId})`;
+  await sql`DELETE FROM post_comments WHERE user_id  = ${userId} OR post_id IN (SELECT id FROM posts WHERE user_id  = ${userId})`;
+  await sql`DELETE FROM post_reactions WHERE user_id = ${userId} OR post_id IN (SELECT id FROM posts WHERE user_id  = ${userId})`;
+  await sql`DELETE FROM messages      WHERE sender_id = ${userId}`;
+  await sql`DELETE FROM pickup_hours  WHERE user_id = ${userId}`;
+  await sql`DELETE FROM push_subscriptions WHERE user_id = ${userId}`;
+
+  // 8. Delete their dishes and posts. Orders referencing them will have
+  //    dish_id nulled by the FK; snapshots from step 5 preserve the info.
+  await sql`DELETE FROM dishes WHERE seller_id = ${userId}`;
+  await sql`DELETE FROM posts  WHERE user_id  = ${userId}`;
+
+  // 9. Count what survived on the orders side for the response.
+  const preservedCount = await sql`
+    SELECT COUNT(*)::int AS c FROM orders
+     WHERE buyer_name_snapshot  IS NOT NULL AND buyer_email_snapshot = ${user.email}
+        OR (dish_name_snapshot  IS NOT NULL AND dish_id IS NULL)
+  `;
+
+  // 10. Finally, delete the user row itself. FK SET NULL fires on orders.
+  await sql`DELETE FROM users WHERE id = ${userId}`;
+
+  return {
+    deletedUserEmail: user.email,
+    blobUrlsToDelete: blobUrls,
+    refundedOrderCount: totalRefunded,
+    preservedOrderCount: preservedCount.rows[0].c,
+  };
+}
 
 export async function getSellerOrders(sellerId: number) {
   const result = await sql`

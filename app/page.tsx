@@ -409,6 +409,8 @@ export default function Home() {
   const [adminUserFilter, setAdminUserFilter] = useState<'all' | 'pending' | 'sellers' | 'suspended' | 'admins' | 'disabled'>('all');
   const [adminUserSearch, setAdminUserSearch] = useState('');
   const [adminSelectedUser, setAdminSelectedUser] = useState<AdminUserDetail | null>(null);
+  const [adminDeleteConfirmingFor, setAdminDeleteConfirmingFor] = useState<number | null>(null);
+  const [adminDeleteChecked, setAdminDeleteChecked] = useState(false);
   const [adminSelectedUserOrders, setAdminSelectedUserOrders] = useState<any[]>([]);
   const [adminDishes, setAdminDishes] = useState<AdminDishRow[]>([]);
   const [adminDishSearch, setAdminDishSearch] = useState('');
@@ -681,6 +683,20 @@ export default function Home() {
     }
   };
 
+  const adminDeleteUser = async (userId: number) => {
+    const result = await adminAction({ action: 'deleteUser', userId });
+    if (result) {
+      const refundedText = result.refundedOrderCount > 0
+        ? `, refunded ${result.refundedOrderCount} order${result.refundedOrderCount === 1 ? '' : 's'}`
+        : '';
+      showToast(`Deleted ${result.deletedUserEmail}${refundedText}`);
+      setAdminDeleteConfirmingFor(null);
+      setAdminDeleteChecked(false);
+      setAdminSelectedUser(null);         // Bounce back to users list (current detail is stale)
+      setAdminSelectedUserOrders([]);
+    }
+  };
+  
   const adminSetRole = async (userId: number, role: 'user' | 'admin') => {
     const result = await adminAction({ action: 'setRole', userId, role });
     if (result) {

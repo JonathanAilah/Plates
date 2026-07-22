@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { del } from '@vercel/blob';
 import { requireAdmin } from '@/lib/auth';
 import {
   getPendingSellers,
@@ -15,6 +16,7 @@ import {
   getAdminStats,
   getAdminUserOrders,
   getAdminFinancials,
+  deleteUserCompletely,
 } from '@/lib/db';
 
 function errorResponse(error: any) {
@@ -137,6 +139,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
+    if (action === 'deleteUser') {
+      if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 });
+      // Never let an admin delete their own account
+      if (userId === me.id) {
+        return NextResponse.json({ error: 'Cannot delete your own account' }, { status: 400 });
+      }
+
+      // Run the DB-side deletion (refunds open orders, snapshots order data,
+      // deletes dependent rows, returns Blob URLs to clean up).
+      const result = await deleteUserCompletely(userId);
+
+      // Blob cleanup runs AFTER the DB commit. If any Blob delete fails,
+      // log it — the user row is already gone, so we don't want to fail
+      // the whole request. Orphan blobs can be cleaned up later.
+      let blobDeleteFailures = 0;
+      for (const url of result.blobUrlsToDelete) {
+        try {
+          await del(url);
+        } catch (err) {
+          blobDeleteFailures++;
+          console.error('Blob delete failed for', url, err);
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        deletedUserEmail: result.deletedUserEmail,
+        refundedOrderCount: result.refundedOrderCount,
+        preservedOrderCount: result.preservedOrderCount,
+        blobsDeleted: result.blobUrlsToDelete.length - blobDeleteFailures,
+        blobDeleteFailures,
+      });
+    }
+    
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Admin POST error:', error);
