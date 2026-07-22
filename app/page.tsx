@@ -1643,8 +1643,9 @@ export default function Home() {
   };
 
   const removeDish = async (dishId: number) => {
-    try {
-      await fetch('/api/dishes', {
+  if (!confirm('Delete this dish? This cannot be undone.')) return;
+  try {
+    await fetch('/api/dishes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete', dishId }),
