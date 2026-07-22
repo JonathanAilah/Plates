@@ -619,6 +619,7 @@ export async function getCart(buyerId: number) {
   return result.rows;
 }
 // Cook earnings summary from orders (excludes cancelled).
+// Cook earnings summary from orders (excludes cancelled).
 export async function getCookEarnings(sellerId: number) {
   const summary = await sql`
     SELECT
@@ -631,6 +632,28 @@ export async function getCookEarnings(sellerId: number) {
     WHERE d.seller_id = ${sellerId}
       AND o.status != 'cancelled'
   `;
+  const thisWeek = await sql`
+    SELECT
+      COALESCE(SUM(o.cook_earnings), 0) as total_earnings,
+      COALESCE(SUM(o.total_price), 0) as total_sales,
+      COUNT(*)::int as order_count
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${sellerId}
+      AND o.status != 'cancelled'
+      AND o.created_at >= DATE_TRUNC('week', CURRENT_DATE)
+  `;
+  const thisMonth = await sql`
+    SELECT
+      COALESCE(SUM(o.cook_earnings), 0) as total_earnings,
+      COALESCE(SUM(o.total_price), 0) as total_sales,
+      COUNT(*)::int as order_count
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${sellerId}
+      AND o.status != 'cancelled'
+      AND o.created_at >= DATE_TRUNC('month', CURRENT_DATE)
+  `;
   const recent = await sql`
     SELECT o.id, o.total_price, o.cook_earnings, o.platform_fee, o.status, o.created_at,
            d.name as dish_name, d.emoji as dish_emoji
@@ -641,7 +664,12 @@ export async function getCookEarnings(sellerId: number) {
     ORDER BY o.created_at DESC
     LIMIT 20
   `;
-  return { summary: summary.rows[0], recent: recent.rows };
+  return {
+    summary: summary.rows[0],
+    thisWeek: thisWeek.rows[0],
+    thisMonth: thisMonth.rows[0],
+    recent: recent.rows,
+  };
 }
 export async function addToCart(buyerId: number, dishId: number, quantity: number) {
   const result = await sql`
