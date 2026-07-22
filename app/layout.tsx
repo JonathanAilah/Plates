@@ -5,6 +5,15 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Plates - Home-Cooked Food Marketplace',
   description: 'Buy and sell delicious home-cooked meals from local cooks',
+  manifest: '/brand/site.webmanifest',
+  icons: {
+    icon: [
+      { url: '/brand/favicon.svg', type: 'image/svg+xml' },
+      { url: '/brand/favicon-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/brand/favicon-48.png', sizes: '48x48', type: 'image/png' },
+    ],
+    apple: '/brand/apple-touch-icon.png',
+  },
 };
 
 export default function RootLayout({
