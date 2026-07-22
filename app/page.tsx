@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star } from 'lucide-react';
-import { SignInButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/nextjs';
+import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
@@ -335,6 +335,15 @@ export default function Home() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [myDishes, setMyDishes] = useState<Dish[]>([]);
   const [loading, setLoading] = useState(true);
+  const { isSignedIn, isLoaded } = useAuth();
+
+  useEffect(() => {
+    // Clerk finished loading and reports signed out, but the app still
+    // holds a user in state → force a clean reload to reset everything.
+    if (isLoaded && !isSignedIn && user) {
+      window.location.href = '/';
+    }
+  }, [isLoaded, isSignedIn, user]);
   const [dishPhotoFile, setDishPhotoFile] = useState<File | null>(null);
   const [dishPhotoPreview, setDishPhotoPreview] = useState<string | null>(null);
   const [profileName, setProfileName] = useState('');
