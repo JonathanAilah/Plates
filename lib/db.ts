@@ -310,6 +310,7 @@ export async function createUserFromClerk(clerkUserId: string, name: string, ema
   const result = await sql`
     INSERT INTO users (clerk_user_id, name, email, avatar, bio)
     VALUES (${clerkUserId}, ${name}, ${email}, ${avatar}, 'Food enthusiast')
+    ON CONFLICT (email) DO UPDATE SET clerk_user_id = EXCLUDED.clerk_user_id
     RETURNING *
   `;
   return result.rows[0];
