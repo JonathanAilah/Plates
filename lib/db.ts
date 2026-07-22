@@ -533,18 +533,26 @@ export async function clearCart(buyerId: number) {
   return { success: true };
 }
 
-export async function checkoutCart(buyerId: number, tipAmount: number, serviceFee: number, pickupAt: string | null = null) {
+export async function checkoutCart(
+  buyerId: number,
+  tipAmount: number,
+  serviceFee: number,
+  pickupAt: string | null = null,
+  paymentIntentIds: string[] = [],
+) {
   const items = await getCart(buyerId);
   if (items.length === 0) return { orders: [], total: 0 };
   const orders = [];
   let total = 0;
+  // Single-cook carts: one payment intent covers the order. Store it on each row.
+  const primaryIntentId = paymentIntentIds[0] || null;
   for (const item of items) {
     const linePrice = Number(item.price) * item.quantity;
     total += linePrice;
     const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId})
       RETURNING *
     `;
     orders.push(order.rows[0]);

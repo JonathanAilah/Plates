@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'checkout') {
-      const result = await checkoutCart(me.id, body.tipAmount || 0, body.serviceFee || 0, body.pickupAt || null);
+      const result = await checkoutCart(me.id, body.tipAmount || 0, body.serviceFee || 0, body.pickupAt || null, body.paymentIntentIds || []);
       return NextResponse.json(result);
     }
 

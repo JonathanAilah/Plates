@@ -6,6 +6,7 @@ import { SignInButton, SignedIn, SignedOut, UserButton, useUser } from '@clerk/n
 import MapView from '@/components/MapView';
 import AddressAutocomplete from '@/components/AddressAutocomplete';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
+import CheckoutPayment from '@/components/CheckoutPayment';
 
 interface Dish {
   id: number;
@@ -322,7 +323,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [orders, setOrders] = useState<BuyerOrder[]>([]);
@@ -349,6 +350,10 @@ export default function Home() {
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
   const [showingDirections, setShowingDirections] = useState(false);
   const [tripInfo, setTripInfo] = useState<{ distanceText: string; durationText: string } | null>(null);
+  const [checkoutSecrets, setCheckoutSecrets] = useState<string[]>([]);
+  const [checkoutTotalLabel, setCheckoutTotalLabel] = useState('');
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutIntentIds, setCheckoutIntentIds] = useState<string[]>([]);
 
   // Cook profile form state
   const [cpLegalName, setCpLegalName] = useState('');
@@ -1300,12 +1305,46 @@ export default function Home() {
   const cartTotal = subtotal + serviceFee + (cart.length > 0 ? tipAmount : 0);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
+  
+  // Phase 1: get PaymentIntent(s) from Stripe, then show the payment screen.
   const placeOrder = async () => {
     if (!user || cart.length === 0) return;
+    setCheckoutError(null);
     try {
-      // Compute the pickup timestamp from the duration slider
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tipAmount, serviceFee }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCheckoutError(data.error || 'Could not start checkout.');
+        showToast(data.error || 'Could not start checkout.');
+        return;
+      }
+      const secrets = (data.intents || []).map((i: any) => i.clientSecret);
+      const intentIds = (data.intents || []).map((i: any) => i.paymentIntentId);
+      if (secrets.length === 0) {
+        setCheckoutError('Nothing to charge.');
+        return;
+      }
+      setCheckoutSecrets(secrets);
+      setCheckoutIntentIds(intentIds);
+      setCheckoutTotalLabel(`$${cartTotal.toFixed(2)}`);
+      setScreen('checkout-payment');
+    } catch (error) {
+      console.error('Checkout start error:', error);
+      setCheckoutError('Could not start checkout.');
+    }
+  };
+
+  // Phase 2: called by the payment component after all charges succeed.
+  // Now we actually create the orders + clear the cart (your original logic).
+  const finalizeOrder = async () => {
+    if (!user) return;
+    try {
       const pickupAtIso = new Date(Date.now() + pickupDurationMin * 60_000).toISOString();
-      const res = await fetch('/api/cart', {
+      await fetch('/api/cart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1314,16 +1353,18 @@ export default function Home() {
           tipAmount,
           serviceFee,
           pickupAt: pickupAtIso,
+          paymentIntentIds: checkoutIntentIds,
         }),
+
       });
-      await res.json();
 
       const totalSnapshot = cartTotal;
       const itemCountSnapshot = cartCount;
 
       setCart([]);
+      setCheckoutSecrets([]);
+      setCheckoutIntentIds([]);
       showToast(`Order placed · $${totalSnapshot.toFixed(2)}`);
-      // Reload orders and jump to the Orders screen so the buyer sees their new order
       await loadOrders(user.id);
       setScreen('orders');
 
@@ -1333,33 +1374,9 @@ export default function Home() {
         message: `✓ Paid $${totalSnapshot.toFixed(2)} for ${itemCountSnapshot} item${itemCountSnapshot > 1 ? 's' : ''}`,
       }]);
     } catch (error) {
-      console.error('Checkout error:', error);
+      console.error('Finalize order error:', error);
     }
   };
-
-  const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
-    if (!user) return;
-    try {
-      await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'updateStatus', orderId, status }),
-      });
-      // Refresh both sides so UI updates immediately
-      await loadCookOrders(user.id);
-      await loadOrders(user.id);
-    } catch (e) {
-      console.error('Update order status error:', e);
-    }
-  };
-
-  const cancelOrder = async (orderId: string) => {
-    if (!user) return;
-    if (!confirm('Cancel this order?')) return;
-    await updateOrderStatus(orderId, 'cancelled');
-    showToast('Order cancelled');
-  };
-
   const handleDishPhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1367,6 +1384,45 @@ export default function Home() {
     setDishPhotoPreview(URL.createObjectURL(file));
   };
 
+  // Cook drives order status transitions (accept, cooking, ready, decline).
+  const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateStatus', orderId, status }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        showToast(data.error || 'Could not update order');
+        return;
+      }
+      await loadCookOrders(user.id);
+    } catch (error) {
+      console.error('Update order status error:', error);
+    }
+  };
+
+  // Buyer cancels their own order.
+  const cancelOrder = async (orderId: string) => {
+    if (!user) return;
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'updateStatus', orderId, status: 'cancelled' }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        showToast(data.error || 'Could not cancel order');
+        return;
+      }
+      await loadOrders(user.id);
+    } catch (error) {
+      console.error('Cancel order error:', error);
+    }
+  };
   const addDish = async (dishName: string, priceValue: number) => {
     if (!user) return;
     try {
@@ -2845,7 +2901,35 @@ export default function Home() {
             </div>
           </div>
         )}
-
+        {/* ================= CHECKOUT PAYMENT ================= */}
+          {screen === 'checkout-payment' && (
+            <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
+              <div style={{ padding: '20px 22px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button
+                  onClick={() => setScreen('cart')}
+                  style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink, border: 'none', cursor: 'pointer' }}
+                >
+                  ‹
+                </button>
+                <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Payment</div>
+              </div>
+              <div style={{ padding: '0 22px' }}>
+                <div style={{ background: C.card, borderRadius: 14, padding: 18, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  {checkoutError && (
+                    <div style={{ marginBottom: 14, padding: 10, background: '#fceded', border: '1px solid #f5b8b8', borderRadius: 10, color: '#8a2a2a', fontSize: 13 }}>
+                      {checkoutError}
+                    </div>
+                  )}
+                  <CheckoutPayment
+                    clientSecrets={checkoutSecrets}
+                    totalLabel={checkoutTotalLabel}
+                    onSuccess={finalizeOrder}
+                    onCancel={() => setScreen('cart')}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         {/* ================= CART ================= */}
         {screen === 'cart' && (
           <div style={{ animation: 'plfade .3s ease', paddingBottom: 100 }}>
