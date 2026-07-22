@@ -2032,7 +2032,9 @@ export default function Home() {
               </button>
             </SignInButton>
           </div>
-
+          <div style={{ padding: '0 20px 10px', font: `400 13px/1.4 ${font.sans}`, color: C.inkSoft }}>
+            Homemade meals from cooks in your neighborhood. Order online, pick up nearby.
+          </div>
           {/* Search bar (display only for anonymous — sign in prompt on interact) */}
           <div style={{ padding: '12px 20px 0' }}>
             <SignInButton mode="modal">
@@ -3371,16 +3373,16 @@ export default function Home() {
                     <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
                   </div>
                 </div>
-<div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-  <div style={{ flex: 1 }}>
-    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.earnings?.thisWeek?.total_earnings || 0).toFixed(2)}</div>
-    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>This week · {earnings.earnings?.thisWeek?.order_count || 0} orders</div>
-  </div>
-  <div style={{ flex: 1 }}>
-    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.earnings?.thisMonth?.total_earnings || 0).toFixed(2)}</div>
-    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>This month · {earnings.earnings?.thisMonth?.order_count || 0} orders</div>
-  </div>
-</div>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.earnings?.thisWeek?.total_earnings || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>This week · {earnings.earnings?.thisWeek?.order_count || 0} orders</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.earnings?.thisMonth?.total_earnings || 0).toFixed(2)}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>This month · {earnings.earnings?.thisMonth?.order_count || 0} orders</div>
+                  </div>
+                </div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.available || 0).toFixed(2)}</div>
