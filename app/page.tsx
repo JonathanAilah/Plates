@@ -692,6 +692,7 @@ export default function Home() {
       showToast(`Deleted ${result.deletedUserEmail}${refundedText}`);
       setAdminDeleteConfirmingFor(null);
       setAdminDeleteChecked(false);
+      setScreen('admin-users');           // Navigate away FIRST — detail render would crash on null user
       setAdminSelectedUser(null);         // Bounce back to users list (current detail is stale)
       setAdminSelectedUserOrders([]);
     }
