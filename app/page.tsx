@@ -240,8 +240,10 @@ interface User {
   avatar: string;
   bio: string;
   photo_url: string | null;
-  latitude: number | null;
+  latitude: number | null;          // live location, refreshed each visit
   longitude: number | null;
+  kitchen_latitude?: number | null; // pickup spot, from the prep address
+  kitchen_longitude?: number | null;
   prep_address: string | null;
   legal_name: string | null;
   kitchen_name: string | null;
@@ -1555,27 +1557,11 @@ export default function Home() {
           // Kick off the unreviewed-orders prompt (only if the user has completed orders waiting)
           setTimeout(() => { checkForUnreviewedOrders(); }, 800);
 
-          // Ask for location if we don't already have one
-          if (currentUser.latitude == null && navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-              async (pos) => {
-                const { latitude, longitude } = pos.coords;
-                try {
-                  const res = await fetch('/api/users', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
-                  });
-                  if (res.ok) {
-                    const updated = await res.json();
-                    setUser(updated);
-                  }
-                } catch (e) { console.error(e); }
-              },
-              () => { },
-              { timeout: 8000 }
-            );
-          }
+          // Refresh the user's CURRENT location on app open. (It used to run
+          // only when latitude was null — but cook onboarding wrote the
+          // kitchen address into the same columns, so the location froze at
+          // the kitchen forever. Kitchen coords now live separately.)
+          refreshLiveLocation();
 
           // Deep link: /?dish=123 (used by cook profile pages) opens that
           // meal's info screen directly instead of landing on the feed.
@@ -1614,6 +1600,45 @@ export default function Home() {
     loadDishesPage(0, true, { lat: user.latitude, lng: user.longitude });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.latitude, user?.longitude, nearbyRadiusMi]);
+
+  // Refresh the user's live location (blue dot, distances, nearby radius).
+  // Throttled: skipped when the last fix is under 2 minutes old, so tab
+  // switches don't spam the GPS. Runs on app open and whenever the app
+  // returns to the foreground — moving around with the app backgrounded is
+  // picked up the moment it's looked at again. No continuous tracking.
+  const lastLocationFixAt = useRef(0);
+  const refreshLiveLocation = () => {
+    if (!navigator.geolocation) return;
+    if (Date.now() - lastLocationFixAt.current < 120000) return;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        lastLocationFixAt.current = Date.now();
+        const { latitude, longitude } = pos.coords;
+        // Apply locally right away so the UI is correct without waiting on
+        // the server round-trip.
+        setUser(prev => (prev ? { ...prev, latitude, longitude } : prev));
+        try {
+          await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
+          });
+        } catch (e) { console.error(e); }
+      },
+      () => { /* denied or unavailable — keep last known */ },
+      { timeout: 8000, maximumAge: 60000 }
+    );
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshLiveLocation();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   // End in-app navigation whenever the user leaves the order-detail screen
   useEffect(() => {
@@ -2159,8 +2184,9 @@ export default function Home() {
         seller_name: user.name,
         seller_avatar: user.avatar,
         seller_photo_url: user.photo_url,
-        seller_latitude: user.latitude,
-        seller_longitude: user.longitude,
+        // Dish pins live at the KITCHEN, not wherever the cook happens to be
+        seller_latitude: user.kitchen_latitude ?? user.latitude,
+        seller_longitude: user.kitchen_longitude ?? user.longitude,
       };
       setMyDishes([...myDishes, fullDish]);
       // Catering items live on the cook's catering page only — never the feed
