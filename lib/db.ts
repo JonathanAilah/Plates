@@ -1,7 +1,22 @@
 import { sql } from '@vercel/postgres';
 import { PLATES_FEE_PERCENT } from './fees';
 
-export async function initializeDatabase() {
+// Memoized so the schema migration runs at most once per server instance
+// rather than on every request. On failure the cached promise is cleared so
+// a later call can retry.
+let migrationPromise: Promise<void> | null = null;
+
+export function initializeDatabase(): Promise<void> {
+  if (!migrationPromise) {
+    migrationPromise = runMigrations().catch((err) => {
+      migrationPromise = null;
+      throw err;
+    });
+  }
+  return migrationPromise;
+}
+
+async function runMigrations(): Promise<void> {
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS users (

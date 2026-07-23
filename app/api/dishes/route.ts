@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   createDish, getDishes, getDish, getSellerDishes, toggleLike, isLiked,
   updateDishPrice, deleteDish, updateDishPhoto, checkGenRateLimit,
-  updateDishFeatured, updateDishHidden,
+  updateDishFeatured, updateDishHidden, initializeDatabase,
 } from '@/lib/db';
 import { generateFoodImage } from '@/lib/imageGen';
 import { getSessionUser, requireSessionUser } from '@/lib/auth';
@@ -22,8 +22,10 @@ export async function GET(request: NextRequest) {
     const id = searchParams.get('id');
     const sellerId = searchParams.get('sellerId');
 
-    // Public: anyone can browse
+    // Public: anyone can browse. Ensure the schema is migrated on the first
+    // request after a cold start (memoized — a no-op once the instance is warm).
     if (action === 'getAll') {
+      await initializeDatabase();
       const dishes = await getDishes();
       return NextResponse.json(dishes);
     }

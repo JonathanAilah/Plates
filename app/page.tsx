@@ -1124,20 +1124,17 @@ export default function Home() {
   useEffect(() => {
     const initApp = async () => {
       try {
-        // Public: ensures DB schema is up to date
-        await fetch('/api/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'init' }),
-        });
+        // Load dishes (public) and the current user (null if anonymous) in
+        // parallel. The dishes route migrates the schema on first hit, so no
+        // separate blocking init call is needed on boot.
+        const [dishRes, meRes] = await Promise.all([
+          fetch('/api/dishes?action=getAll'),
+          fetch('/api/users'),
+        ]);
 
-        // Load dishes (public — no auth required)
-        const dishRes = await fetch('/api/dishes?action=getAll');
         const dishData = await dishRes.json();
         setDishes(Array.isArray(dishData) ? dishData : []);
 
-        // Load the current signed-in user (returns null if anonymous)
-        const meRes = await fetch('/api/users');
         const currentUser: User | null = meRes.ok ? await meRes.json() : null;
 
         setUser(currentUser);
