@@ -398,7 +398,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [dishOffset, setDishOffset] = useState(0);
@@ -534,6 +534,7 @@ export default function Home() {
   const [feeSaving, setFeeSaving] = useState(false);
   const [earnings, setEarnings] = useState<any>(null);
   const [connectingStripe, setConnectingStripe] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
   // Catering: cooks flag new dishes as catering items; buyers schedule a
   // pickup date (+ time) at checkout instead of the pickup-in-minutes slider.
@@ -609,6 +610,23 @@ export default function Home() {
   const [adminSelectedUserOrders, setAdminSelectedUserOrders] = useState<any[]>([]);
   const [adminDishes, setAdminDishes] = useState<AdminDishRow[]>([]);
   const [adminDishSearch, setAdminDishSearch] = useState('');
+  // Financial drill-down: orders list (behind Platform revenue / Gross
+  // sales / Orders cards) and cook payouts (behind the Cook payouts card).
+  const [adminOrders, setAdminOrders] = useState<any[]>([]);
+  const [adminOrdersSearch, setAdminOrdersSearch] = useState('');
+  const [adminOrdersStatus, setAdminOrdersStatus] = useState<'all' | OrderStatus>('all');
+  const [adminOrdersOffset, setAdminOrdersOffset] = useState(0);
+  const [adminOrdersHasMore, setAdminOrdersHasMore] = useState(false);
+  const [adminOrdersLoadingMore, setAdminOrdersLoadingMore] = useState(false);
+  const [adminCooks, setAdminCooks] = useState<any[]>([]);
+  const [adminCooksSearch, setAdminCooksSearch] = useState('');
+  const [adminCooksOffset, setAdminCooksOffset] = useState(0);
+  const [adminCooksHasMore, setAdminCooksHasMore] = useState(false);
+  const [adminCooksLoadingMore, setAdminCooksLoadingMore] = useState(false);
+  const [adminCookDetail, setAdminCookDetail] = useState<any>(null);
+  const [adminCookPastOffset, setAdminCookPastOffset] = useState(0);
+  const [adminCookPastHasMore, setAdminCookPastHasMore] = useState(false);
+  const [adminCookPastLoadingMore, setAdminCookPastLoadingMore] = useState(false);
   const [adminActionSubmitting, setAdminActionSubmitting] = useState(false);
   const [adminRejectReason, setAdminRejectReason] = useState('');
   const [adminSuspendReason, setAdminSuspendReason] = useState('');
@@ -704,6 +722,28 @@ export default function Home() {
       setEarnings(data);
     } catch (e) {
       console.error('Load earnings error:', e);
+    }
+  };
+
+  // Withdraw Funds: moves the cook's full available Plates balance to their
+  // connected bank via Stripe. Amount is decided server-side.
+  const withdrawFunds = async () => {
+    if (withdrawing) return;
+    setWithdrawing(true);
+    try {
+      const res = await fetch('/api/stripe/withdraw', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Withdrawal failed');
+        return;
+      }
+      showToast(`$${Number(data.withdrawal.amount).toFixed(2)} on its way to your bank`);
+      await loadEarnings();
+    } catch (e) {
+      console.error('Withdraw error:', e);
+      showToast('Network error — your balance was not deducted');
+    } finally {
+      setWithdrawing(false);
     }
   };
   const loadMessages = async (orderId: string, userId: number) => {
@@ -827,6 +867,79 @@ export default function Home() {
         setAdminDishes(Array.isArray(data) ? data : []);
       }
     } catch (e) { console.error('Admin dishes error:', e); }
+  };
+
+  const ADMIN_PAGE_SIZE = 30;
+
+  // Orders drill-down (Platform revenue / Gross sales / Orders cards)
+  const loadAdminOrders = async (reset: boolean) => {
+    const offset = reset ? 0 : adminOrdersOffset;
+    try {
+      const params = new URLSearchParams({ action: 'ordersList', limit: String(ADMIN_PAGE_SIZE), offset: String(offset) });
+      if (adminOrdersSearch.trim()) params.set('search', adminOrdersSearch.trim());
+      if (adminOrdersStatus !== 'all') params.set('status', adminOrdersStatus);
+      const res = await fetch(`/api/admin?${params.toString()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const arr = Array.isArray(data) ? data : [];
+      setAdminOrders(prev => (reset ? arr : [...prev, ...arr]));
+      setAdminOrdersHasMore(arr.length === ADMIN_PAGE_SIZE);
+      setAdminOrdersOffset(offset + arr.length);
+    } catch (e) { console.error('Admin orders error:', e); }
+  };
+  const loadMoreAdminOrders = async () => {
+    if (adminOrdersLoadingMore) return;
+    setAdminOrdersLoadingMore(true);
+    try { await loadAdminOrders(false); } finally { setAdminOrdersLoadingMore(false); }
+  };
+
+  // Cook payouts drill-down (Cook payouts card + "Top cooks" rows)
+  const loadAdminCooksPayouts = async (reset: boolean) => {
+    const offset = reset ? 0 : adminCooksOffset;
+    try {
+      const params = new URLSearchParams({ action: 'cooksPayouts', limit: String(ADMIN_PAGE_SIZE), offset: String(offset) });
+      if (adminCooksSearch.trim()) params.set('search', adminCooksSearch.trim());
+      const res = await fetch(`/api/admin?${params.toString()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const arr = Array.isArray(data) ? data : [];
+      setAdminCooks(prev => (reset ? arr : [...prev, ...arr]));
+      setAdminCooksHasMore(arr.length === ADMIN_PAGE_SIZE);
+      setAdminCooksOffset(offset + arr.length);
+    } catch (e) { console.error('Admin cook payouts error:', e); }
+  };
+  const loadMoreAdminCooksPayouts = async () => {
+    if (adminCooksLoadingMore) return;
+    setAdminCooksLoadingMore(true);
+    try { await loadAdminCooksPayouts(false); } finally { setAdminCooksLoadingMore(false); }
+  };
+
+  // A single cook's payout detail: summary + upcoming (active) + past (picked up)
+  const loadAdminCookPayoutDetail = async (cookId: number) => {
+    try {
+      const res = await fetch(`/api/admin?action=cookPayoutDetail&cookId=${cookId}&pastLimit=${ADMIN_PAGE_SIZE}&pastOffset=0`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setAdminCookDetail(data);
+      setAdminCookPastHasMore((data.past || []).length === ADMIN_PAGE_SIZE);
+      setAdminCookPastOffset((data.past || []).length);
+      setScreen('admin-cook-payout-detail');
+    } catch (e) { console.error('Admin cook payout detail error:', e); }
+  };
+  const loadMoreAdminCookPast = async () => {
+    if (!adminCookDetail || adminCookPastLoadingMore) return;
+    setAdminCookPastLoadingMore(true);
+    try {
+      const res = await fetch(`/api/admin?action=cookPayoutDetail&cookId=${adminCookDetail.cook.id}&pastLimit=${ADMIN_PAGE_SIZE}&pastOffset=${adminCookPastOffset}`);
+      if (res.ok) {
+        const data = await res.json();
+        const morePast = data.past || [];
+        setAdminCookDetail((prev: any) => prev ? { ...prev, past: [...prev.past, ...morePast] } : prev);
+        setAdminCookPastHasMore(morePast.length === ADMIN_PAGE_SIZE);
+        setAdminCookPastOffset(adminCookPastOffset + morePast.length);
+      }
+    } catch (e) { console.error('Admin cook payout load more error:', e); }
+    finally { setAdminCookPastLoadingMore(false); }
   };
 
   const adminAction = async (payload: Record<string, any>): Promise<any | null> => {
@@ -1472,6 +1585,24 @@ export default function Home() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery]);
+
+  // Admin orders drill-down: reload (debounced) on entering the screen or
+  // changing search/status.
+  useEffect(() => {
+    if (screen !== 'admin-orders') return;
+    const t = setTimeout(() => { loadAdminOrders(true); }, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, adminOrdersSearch, adminOrdersStatus]);
+
+  // Admin cook payouts drill-down: reload (debounced) on entering the screen
+  // or changing search.
+  useEffect(() => {
+    if (screen !== 'admin-cook-payouts') return;
+    const t = setTimeout(() => { loadAdminCooksPayouts(true); }, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, adminCooksSearch]);
 
   useEffect(() => {
     if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
@@ -4032,24 +4163,58 @@ export default function Home() {
                     <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>This month · {earnings.earnings?.thisMonth?.order_count || 0} orders</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.available || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to pay out</div>
+                {/* Plates balance — held by the platform until withdrawn */}
+                <div style={{ background: C.surface, borderRadius: 12, padding: 14, border: `1px solid ${C.divider}` }}>
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(earnings.balance?.available || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to withdraw</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 16px ${font.serif}`, color: C.ink }}>${Number(earnings.balance?.pending || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending pickup</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 16px ${font.serif}`, color: C.ink }}>${Number(earnings.balance?.withdrawn || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Withdrawn</div>
+                    </div>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.pending || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending in Stripe</div>
+                  <button
+                    onClick={withdrawFunds}
+                    disabled={withdrawing || Number(earnings.balance?.available || 0) < 1}
+                    style={{
+                      width: '100%', padding: 12, borderRadius: 10, font: `500 14px ${font.sans}`,
+                      background: (!withdrawing && Number(earnings.balance?.available || 0) >= 1) ? C.green : C.cardAlt,
+                      color: (!withdrawing && Number(earnings.balance?.available || 0) >= 1) ? '#fff' : C.muted,
+                    }}
+                  >
+                    {withdrawing
+                      ? 'Sending to your bank…'
+                      : Number(earnings.balance?.available || 0) >= 1
+                        ? `Withdraw $${Number(earnings.balance.available).toFixed(2)}`
+                        : 'Withdraw funds'}
+                  </button>
+                  <div style={{ font: `400 10.5px/1.5 ${font.sans}`, color: C.muted, marginTop: 8 }}>
+                    Earnings become available once an order is picked up. Withdrawals go to the bank connected in Profile → Payments.
                   </div>
                 </div>
 
-                {earnings.stripe?.payouts?.length > 0 && (
+                {earnings.withdrawals?.length > 0 && (
                   <div style={{ marginTop: 14, borderTop: `1px solid ${C.divider}`, paddingTop: 12 }}>
-                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent payouts</div>
-                    {earnings.stripe.payouts.slice(0, 5).map((p: any) => (
-                      <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
-                        <span>${Number(p.amount).toFixed(2)}</span>
-                        <span style={{ color: C.muted }}>{p.status}</span>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Withdrawal history</div>
+                    {earnings.withdrawals.slice(0, 5).map((w: any) => (
+                      <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
+                        <span>${Number(w.amount).toFixed(2)}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ color: C.muted, font: `400 11px ${font.sans}` }}>{timeAgo(w.created_at)}</span>
+                          <span style={{
+                            padding: '2px 8px', borderRadius: 8, font: `500 10.5px ${font.sans}`,
+                            background: w.status === 'paid' ? C.greenLight : w.status === 'failed' ? '#fceded' : C.cardAlt,
+                            color: w.status === 'paid' ? C.green : w.status === 'failed' ? '#8a2a2a' : C.inkSoft,
+                          }}>
+                            {w.status === 'paid' ? 'Sent' : w.status === 'failed' ? 'Failed' : 'Processing'}
+                          </span>
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -5200,41 +5365,44 @@ export default function Home() {
                 <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Financials</div>
 
                 <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-                  <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14 }}>
+                  <button onClick={() => setScreen('admin-orders')} style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14, textAlign: 'left' }}>
                     <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(adminFinancials.totals?.platform_revenue || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>Platform revenue</div>
-                  </div>
-                  <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14 }}>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.green, display: 'flex', alignItems: 'center', gap: 3 }}>Platform revenue <ChevronRight size={11} /></div>
+                  </button>
+                  <button onClick={() => setScreen('admin-orders')} style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14, textAlign: 'left' }}>
                     <div style={{ font: `600 22px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.gross_sales || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Gross sales</div>
-                  </div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted, display: 'flex', alignItems: 'center', gap: 3 }}>Gross sales <ChevronRight size={11} /></div>
+                  </button>
                 </div>
 
                 <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-                  <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <button onClick={() => setScreen('admin-cook-payouts')} style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textAlign: 'left' }}>
                     <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.cook_payouts || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Cook payouts</div>
-                  </div>
-                  <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted, display: 'flex', alignItems: 'center', gap: 3 }}>Cook payouts <ChevronRight size={11} /></div>
+                  </button>
+                  <button onClick={() => setScreen('admin-orders')} style={{ flex: 1, background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textAlign: 'left' }}>
                     <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>{adminFinancials.totals?.order_count || 0}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Orders</div>
-                  </div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted, display: 'flex', alignItems: 'center', gap: 3 }}>Orders <ChevronRight size={11} /></div>
+                  </button>
                 </div>
 
                 {adminFinancials.topCooks?.length > 0 && (
                   <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
                     <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10 }}>Top cooks by sales</div>
                     {adminFinancials.topCooks.slice(0, 5).map((c: any) => (
-                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${C.hairline}` }}>
+                      <button key={c.id} onClick={() => loadAdminCookPayoutDetail(c.id)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: `1px solid ${C.hairline}`, textAlign: 'left' }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ font: `500 13px ${font.sans}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.kitchen_name || c.name}</div>
                           <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{c.order_count} orders</div>
                         </div>
-                        <div style={{ textAlign: 'right', flex: 'none' }}>
-                          <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>${Number(c.gross_sales).toFixed(2)}</div>
-                          <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>+${Number(c.platform_revenue).toFixed(2)} fee</div>
+                        <div style={{ textAlign: 'right', flex: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div>
+                            <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>${Number(c.gross_sales).toFixed(2)}</div>
+                            <div style={{ font: `400 11px ${font.sans}`, color: C.green }}>+${Number(c.platform_revenue).toFixed(2)} fee</div>
+                          </div>
+                          <ChevronRight size={14} color={C.muted} />
                         </div>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -5749,6 +5917,293 @@ export default function Home() {
                 <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
                   No dishes found.
                 </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN: ORDERS (financial drill-down) ================= */}
+        {screen === 'admin-orders' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>All orders</div>
+            </div>
+
+            <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <Search size={15} color={C.muted} />
+              <input
+                type="text"
+                value={adminOrdersSearch}
+                onChange={(e) => setAdminOrdersSearch(e.target.value)}
+                placeholder="Search order id, buyer, cook, or dish…"
+                style={{ flex: 1, border: 'none', outline: 'none', font: `400 13px ${font.sans}`, background: 'transparent' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 12 }}>
+              {([
+                { key: 'all', label: 'All' },
+                { key: 'placed', label: 'Placed' },
+                { key: 'accepted', label: 'Accepted' },
+                { key: 'cooking', label: 'Cooking' },
+                { key: 'ready', label: 'Ready' },
+                { key: 'picked_up', label: 'Picked up' },
+                { key: 'cancelled', label: 'Cancelled' },
+              ] as const).map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setAdminOrdersStatus(f.key)}
+                  style={{ flex: 'none', padding: '6px 12px', background: adminOrdersStatus === f.key ? C.ink : C.card, color: adminOrdersStatus === f.key ? '#fff' : C.inkSoft, border: `1px solid ${adminOrdersStatus === f.key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminOrders.map((o: any) => (
+                <div key={o.id} style={{ background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ font: `500 13.5px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {o.quantity} × {o.dish_name}
+                      </div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 3 }}>
+                        {o.buyer_name} → {o.seller_kitchen_name || o.seller_name} · {timeAgo(o.created_at)}
+                      </div>
+                    </div>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status as OrderStatus] + '22', color: statusColors[o.status as OrderStatus], font: `500 10.5px ${font.sans}`, flex: 'none' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColors[o.status as OrderStatus] }} />
+                      {statusLabels[o.status as OrderStatus]}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 14, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.hairline}` }}>
+                    <div>
+                      <div style={{ font: `500 13px ${font.sans}`, color: C.ink }}>${Number(o.total_price).toFixed(2)}</div>
+                      <div style={{ font: `400 10px ${font.sans}`, color: C.muted }}>Total</div>
+                    </div>
+                    <div>
+                      <div style={{ font: `500 13px ${font.sans}`, color: C.green }}>${Number(o.platform_fee ?? 0).toFixed(2)}</div>
+                      <div style={{ font: `400 10px ${font.sans}`, color: C.muted }}>Platform fee</div>
+                    </div>
+                    <div>
+                      <div style={{ font: `500 13px ${font.sans}`, color: C.terracotta }}>${Number(o.cook_earnings ?? 0).toFixed(2)}</div>
+                      <div style={{ font: `400 10px ${font.sans}`, color: C.muted }}>Cook earns</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {adminOrders.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No orders match.
+                </div>
+              )}
+              {adminOrdersHasMore && (
+                <button
+                  onClick={loadMoreAdminOrders}
+                  disabled={adminOrdersLoadingMore}
+                  style={{ padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                >
+                  {adminOrdersLoadingMore ? 'Loading…' : 'Load more orders'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN: COOK PAYOUTS LIST ================= */}
+        {screen === 'admin-cook-payouts' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Cook payouts</div>
+            </div>
+
+            <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <Search size={15} color={C.muted} />
+              <input
+                type="text"
+                value={adminCooksSearch}
+                onChange={(e) => setAdminCooksSearch(e.target.value)}
+                placeholder="Search by cook or kitchen name…"
+                style={{ flex: 1, border: 'none', outline: 'none', font: `400 13px ${font.sans}`, background: 'transparent' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminCooks.map((c: any) => (
+                <button
+                  key={c.id}
+                  onClick={() => loadAdminCookPayoutDetail(c.id)}
+                  style={{ background: C.card, borderRadius: 12, padding: 12, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textAlign: 'left' }}
+                >
+                  {c.photo_url ? (
+                    <span style={{ width: 40, height: 40, borderRadius: '50%', backgroundImage: `url(${c.photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                  ) : (
+                    <span style={{ width: 40, height: 40, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 14px ${font.sans}`, flex: 'none' }}>{c.avatar}</span>
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ font: `500 14px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.kitchen_name || c.name}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                      {c.order_count} order{c.order_count === 1 ? '' : 's'} · {c.stripe_charges_enabled ? 'Stripe connected' : 'Not connected'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right', flex: 'none' }}>
+                    <div style={{ font: `500 13px ${font.sans}`, color: C.terracotta }}>${Number(c.cook_earnings).toFixed(2)}</div>
+                    <div style={{ font: `400 10px ${font.sans}`, color: C.muted }}>earned</div>
+                  </div>
+                  <ChevronRight size={14} color={C.muted} />
+                </button>
+              ))}
+              {adminCooks.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No cooks match.
+                </div>
+              )}
+              {adminCooksHasMore && (
+                <button
+                  onClick={loadMoreAdminCooksPayouts}
+                  disabled={adminCooksLoadingMore}
+                  style={{ padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                >
+                  {adminCooksLoadingMore ? 'Loading…' : 'Load more cooks'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN: COOK PAYOUT DETAIL ================= */}
+        {screen === 'admin-cook-payout-detail' && user.role === 'admin' && adminCookDetail && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin-cook-payouts')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>{adminCookDetail.cook.kitchen_name || adminCookDetail.cook.name}</div>
+            </div>
+
+            <div style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12 }}>
+              {adminCookDetail.cook.photo_url ? (
+                <span style={{ width: 48, height: 48, borderRadius: '50%', backgroundImage: `url(${adminCookDetail.cook.photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+              ) : (
+                <span style={{ width: 48, height: 48, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 18px ${font.sans}`, flex: 'none' }}>{adminCookDetail.cook.avatar}</span>
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{adminCookDetail.cook.name}</div>
+                <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{adminCookDetail.cook.email}</div>
+              </div>
+              <span style={{ font: `500 11px ${font.sans}`, padding: '4px 9px', borderRadius: 8, background: adminCookDetail.cook.stripe_charges_enabled ? C.greenLight : C.terracottaLight, color: adminCookDetail.cook.stripe_charges_enabled ? C.green : C.terracotta, flex: 'none' }}>
+                {adminCookDetail.cook.stripe_charges_enabled ? 'Connected' : 'Not connected'}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+              <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `600 18px ${font.serif}`, color: C.terracotta }}>${Number(adminCookDetail.summary.cook_earnings).toFixed(2)}</div>
+                <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Total earned</div>
+              </div>
+              <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>${Number(adminCookDetail.summary.total_sales).toFixed(2)}</div>
+                <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Total sales</div>
+              </div>
+              <div style={{ flex: 1, background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `600 18px ${font.serif}`, color: C.ink }}>{adminCookDetail.summary.order_count}</div>
+                <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Orders</div>
+              </div>
+            </div>
+
+            {adminCookDetail.balance && (
+              <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 12 }}>
+                  <div style={{ font: `600 16px ${font.serif}`, color: C.green }}>${Number(adminCookDetail.balance.available).toFixed(2)}</div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.green }}>Available balance</div>
+                </div>
+                <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
+                  <div style={{ font: `600 16px ${font.serif}`, color: C.ink }}>${Number(adminCookDetail.balance.pending).toFixed(2)}</div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Pending pickup</div>
+                </div>
+                <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
+                  <div style={{ font: `600 16px ${font.serif}`, color: C.ink }}>${Number(adminCookDetail.balance.withdrawn).toFixed(2)}</div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Withdrawn</div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ font: `400 11px/1.5 ${font.sans}`, color: C.muted, background: C.cardAlt, borderRadius: 10, padding: 10, marginBottom: 16 }}>
+              Plates holds buyer payments; a cook's share becomes available for withdrawal once the order is picked up, and moves to their bank when they tap Withdraw Funds. "Upcoming" below is money that will be released at pickup.
+            </div>
+
+            {adminCookDetail.withdrawals?.length > 0 && (
+              <div style={{ background: C.card, borderRadius: 12, padding: 12, marginBottom: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent withdrawals</div>
+                {adminCookDetail.withdrawals.slice(0, 5).map((w: any) => (
+                  <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12px ${font.sans}`, color: C.inkSoft, padding: '3px 0' }}>
+                    <span>${Number(w.amount).toFixed(2)}</span>
+                    <span style={{ color: w.status === 'paid' ? C.green : w.status === 'failed' ? '#8a2a2a' : C.muted }}>{w.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 10 }}>
+              Upcoming <span style={{ color: C.muted, font: `400 12px ${font.sans}` }}>· {adminCookDetail.upcoming.length} active</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+              {adminCookDetail.upcoming.map((o: any) => (
+                <div key={o.id} style={{ background: C.card, borderRadius: 12, padding: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ font: `500 13px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.quantity} × {o.dish_name}</div>
+                    <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                      for {o.buyer_name} · {formatPickupAt(o.pickup_at)?.clock || timeAgo(o.created_at)}
+                    </div>
+                  </div>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 8, background: statusColors[o.status as OrderStatus] + '22', color: statusColors[o.status as OrderStatus], font: `500 10px ${font.sans}`, flex: 'none' }}>
+                    {statusLabels[o.status as OrderStatus]}
+                  </div>
+                  <div style={{ textAlign: 'right', flex: 'none' }}>
+                    <div style={{ font: `500 12.5px ${font.sans}`, color: C.terracotta }}>${Number(o.cook_earnings ?? 0).toFixed(2)}</div>
+                  </div>
+                </div>
+              ))}
+              {adminCookDetail.upcoming.length === 0 && (
+                <div style={{ padding: 20, textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}`, background: C.card, borderRadius: 12 }}>
+                  No active orders right now.
+                </div>
+              )}
+            </div>
+
+            <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 10 }}>Past</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminCookDetail.past.map((o: any) => (
+                <div key={o.id} style={{ background: C.card, borderRadius: 12, padding: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)', opacity: .85 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ font: `500 13px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.quantity} × {o.dish_name}</div>
+                    <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 2 }}>for {o.buyer_name} · {timeAgo(o.updated_at || o.created_at)}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', flex: 'none' }}>
+                    <div style={{ font: `500 12.5px ${font.sans}`, color: C.terracotta }}>${Number(o.cook_earnings ?? 0).toFixed(2)}</div>
+                  </div>
+                </div>
+              ))}
+              {adminCookDetail.past.length === 0 && (
+                <div style={{ padding: 20, textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}`, background: C.card, borderRadius: 12 }}>
+                  No completed orders yet.
+                </div>
+              )}
+              {adminCookPastHasMore && (
+                <button
+                  onClick={loadMoreAdminCookPast}
+                  disabled={adminCookPastLoadingMore}
+                  style={{ padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                >
+                  {adminCookPastLoadingMore ? 'Loading…' : 'Load more'}
+                </button>
               )}
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { stripe, PLATES_FEE_PERCENT } from '@/lib/stripe';
+import { stripe } from '@/lib/stripe';
 import { getCartGroupedBySeller, getUser, getPlatformSettings } from '@/lib/db';
 import { requireSessionUser } from '@/lib/auth';
 
@@ -46,18 +46,17 @@ export async function POST(req: NextRequest) {
         0,
       );
       // Tip + service fee + tax ride on the first cook's charge (single-cook
-      // default). The tip passes through to the cook; the service fee and tax
-      // are collected by the platform via the application fee (the platform
-      // is the marketplace facilitator responsible for remitting tax).
+      // default). ESCROW MODEL: the entire charge lands in the platform's
+      // Stripe account — no destination transfer at charge time. The cook's
+      // share (cook_earnings + tip, recorded on the order) accrues as a
+      // Plates balance and is transferred to their connected account only
+      // when they tap Withdraw Funds.
       const extrasCents = first ? tipCents + feeCents + taxCents : 0;
       const amountCents = subtotalCents + extrasCents;
-      const applicationFee = Math.round(subtotalCents * PLATES_FEE_PERCENT) + (first ? feeCents + taxCents : 0);
 
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amountCents,
         currency: 'usd',
-        application_fee_amount: applicationFee,
-        transfer_data: { destination: seller.stripe_account_id },
         metadata: { buyerId: String(me.id), sellerId: String(sellerId) },
       });
 
