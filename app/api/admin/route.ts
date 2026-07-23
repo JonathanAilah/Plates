@@ -17,6 +17,7 @@ import {
   getAdminUserOrders,
   getAdminFinancials,
   deleteUserCompletely,
+  updatePlatformSettings,
 } from '@/lib/db';
 
 function errorResponse(error: any) {
@@ -86,6 +87,11 @@ export async function POST(request: NextRequest) {
     const me = await requireAdmin();
     const body = await request.json();
     const { action, userId, dishId, reason } = body;
+
+    if (action === 'updateSettings') {
+      const settings = await updatePlatformSettings(body.settings || {});
+      return NextResponse.json(settings);
+    }
 
     if (action === 'approveSeller') {
       if (!userId) return NextResponse.json({ error: 'userId required' }, { status: 400 });

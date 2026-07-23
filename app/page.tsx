@@ -446,6 +446,11 @@ export default function Home() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [tipAmount, setTipAmount] = useState(3);
   const [tipEditing, setTipEditing] = useState(false);
+  // Platform pricing (tax / service fee / default tip) — loaded from
+  // /api/settings on boot; editable by admins in the Admin tab.
+  const [feeSettings, setFeeSettings] = useState({ taxPercent: 0, serviceFeePercent: 5, serviceFeeMin: 0.5, defaultTip: 3 });
+  const [feeDraft, setFeeDraft] = useState<{ taxPercent: string; serviceFeePercent: string; serviceFeeMin: string; defaultTip: string } | null>(null);
+  const [feeSaving, setFeeSaving] = useState(false);
   const [earnings, setEarnings] = useState<any>(null);
   const [connectingStripe, setConnectingStripe] = useState(false);
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
@@ -640,6 +645,45 @@ export default function Home() {
       console.error('Load admin financials error:', e);
     }
   };
+  // Save the admin's fee/tax/tip edits, then apply them to the live cart math
+  const saveFeeSettings = async () => {
+    if (!feeDraft || feeSaving) return;
+    setFeeSaving(true);
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'updateSettings',
+          settings: {
+            taxPercent: parseFloat(feeDraft.taxPercent),
+            serviceFeePercent: parseFloat(feeDraft.serviceFeePercent),
+            serviceFeeMin: parseFloat(feeDraft.serviceFeeMin),
+            defaultTip: parseFloat(feeDraft.defaultTip),
+          },
+        }),
+      });
+      const saved = await res.json();
+      if (!res.ok) {
+        showToast(saved.error || 'Could not save settings');
+        return;
+      }
+      setFeeSettings(saved);
+      setFeeDraft({
+        taxPercent: String(saved.taxPercent),
+        serviceFeePercent: String(saved.serviceFeePercent),
+        serviceFeeMin: String(saved.serviceFeeMin),
+        defaultTip: String(saved.defaultTip),
+      });
+      showToast('Pricing updated');
+    } catch (e) {
+      console.error('Save settings error:', e);
+      showToast('Network error');
+    } finally {
+      setFeeSaving(false);
+    }
+  };
+
   const loadAdminPending = async () => {
     try {
       const res = await fetch('/api/admin?action=pending');
@@ -1207,10 +1251,21 @@ export default function Home() {
         // Load dishes (public) and the current user (null if anonymous) in
         // parallel. The dishes route migrates the schema on first hit, so no
         // separate blocking init call is needed on boot.
-        const [dishRes, meRes] = await Promise.all([
+        const [dishRes, meRes, settingsRes] = await Promise.all([
           fetch(`/api/dishes?action=getAll&limit=${DISH_PAGE_SIZE}&offset=0`),
           fetch('/api/users'),
+          fetch('/api/settings'),
         ]);
+
+        if (settingsRes.ok) {
+          try {
+            const s = await settingsRes.json();
+            if (s && Number.isFinite(Number(s.serviceFeePercent))) {
+              setFeeSettings(s);
+              setTipAmount(Number(s.defaultTip) || 0);
+            }
+          } catch { /* keep defaults */ }
+        }
 
         // First page loads newest-first (no location yet). Once the user's
         // location is known, an effect below reloads this filtered to nearby.
@@ -1434,6 +1489,16 @@ export default function Home() {
     if (!user || user.role !== 'admin') return;
     if (screen === 'admin') loadAdminStats();
     if (screen === 'admin') loadAdminFinancials();
+    if (screen === 'admin') {
+      fetch('/api/settings').then(r => r.ok ? r.json() : null).then(s => {
+        if (s) setFeeDraft({
+          taxPercent: String(s.taxPercent),
+          serviceFeePercent: String(s.serviceFeePercent),
+          serviceFeeMin: String(s.serviceFeeMin),
+          defaultTip: String(s.defaultTip),
+        });
+      }).catch(() => {});
+    }
     if (screen === 'admin-pending') loadAdminPending();
     if (screen === 'admin-users') loadAdminUsers();
     if (screen === 'admin-dishes') loadAdminDishes();
@@ -1520,8 +1585,9 @@ export default function Home() {
   };
 
   const subtotal = cart.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
-  const serviceFee = cart.length > 0 ? Math.max(0.5, subtotal * 0.05) : 0;
-  const cartTotal = subtotal + serviceFee + (cart.length > 0 ? tipAmount : 0);
+  const serviceFee = cart.length > 0 ? Math.max(feeSettings.serviceFeeMin, subtotal * feeSettings.serviceFeePercent / 100) : 0;
+  const taxAmount = cart.length > 0 ? subtotal * feeSettings.taxPercent / 100 : 0;
+  const cartTotal = subtotal + serviceFee + taxAmount + (cart.length > 0 ? tipAmount : 0);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
 
@@ -1533,7 +1599,9 @@ export default function Home() {
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tipAmount, serviceFee }),
+        // Fee + tax are recomputed server-side from settings; only the tip
+        // (the buyer's choice) is sent.
+        body: JSON.stringify({ tipAmount }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1570,7 +1638,7 @@ export default function Home() {
           action: 'checkout',
           buyerId: user.id,
           tipAmount,
-          serviceFee,
+          serviceFee: serviceFee + taxAmount,
           pickupAt: pickupAtIso,
           paymentIntentIds: checkoutIntentIds,
         }),
@@ -3417,6 +3485,11 @@ export default function Home() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', font: `400 13px ${font.sans}`, color: C.inkSoft }}>
                       <span>Service fee</span><span>${serviceFee.toFixed(2)}</span>
                     </div>
+                    {feeSettings.taxPercent > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', font: `400 13px ${font.sans}`, color: C.inkSoft }}>
+                        <span>Tax ({feeSettings.taxPercent}%)</span><span>${taxAmount.toFixed(2)}</span>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', font: `400 13px ${font.sans}`, color: C.inkSoft }}>
                       <span>Tip the cook</span>
                       {tipEditing ? (
@@ -4646,6 +4719,48 @@ export default function Home() {
                   </div>
                 </div>
                 <ChevronRight size={20} />
+              </div>
+            )}
+
+            {feeDraft && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Fees &amp; pricing</div>
+                <div style={{ background: C.card, borderRadius: 14, padding: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    {([
+                      { key: 'taxPercent', label: 'Tax', suffix: '% of subtotal', min: 0, max: 30, step: 0.25 },
+                      { key: 'serviceFeePercent', label: 'Service fee', suffix: '% of subtotal', min: 0, max: 30, step: 0.5 },
+                      { key: 'serviceFeeMin', label: 'Service fee minimum', suffix: '$', min: 0, max: 10, step: 0.25 },
+                      { key: 'defaultTip', label: 'Default tip', suffix: '$', min: 0, max: 50, step: 0.5 },
+                    ] as const).map(f => (
+                      <div key={f.key}>
+                        <div style={{ font: `500 11.5px ${font.sans}`, color: C.inkSoft, marginBottom: 5 }}>{f.label}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="number"
+                            min={f.min}
+                            max={f.max}
+                            step={f.step}
+                            value={feeDraft[f.key]}
+                            onChange={(e) => setFeeDraft(prev => prev ? { ...prev, [f.key]: e.target.value } : prev)}
+                            style={{ width: '100%', border: `1px solid ${C.divider}`, borderRadius: 8, padding: '8px 10px', font: `500 14px ${font.sans}`, background: '#fff', color: C.ink }}
+                          />
+                        </div>
+                        <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 3 }}>{f.suffix}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ font: `400 11.5px/1.5 ${font.sans}`, color: C.muted, marginTop: 12 }}>
+                    Buyers pay: subtotal + service fee (max of % and minimum) + tax + tip. The tip goes to the cook; the service fee and tax go to the platform. The 15% platform commission on cooks is set in code.
+                  </div>
+                  <button
+                    onClick={saveFeeSettings}
+                    disabled={feeSaving}
+                    style={{ width: '100%', marginTop: 12, padding: 12, background: feeSaving ? C.cardAlt : C.terracotta, color: feeSaving ? C.muted : '#fff', borderRadius: 10, font: `500 13.5px ${font.sans}` }}
+                  >
+                    {feeSaving ? 'Saving…' : 'Save pricing'}
+                  </button>
+                </div>
               </div>
             )}
 
