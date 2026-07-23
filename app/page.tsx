@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star, CreditCard } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
@@ -2053,13 +2053,36 @@ export default function Home() {
       const res = await fetch('/api/stripe/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id }),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
-      if (data.url) {
+      if (res.ok && data.url) {
         window.location.href = data.url;
       } else {
-        console.error('No onboarding URL returned', data);
+        showToast(data.error || 'Could not start payment setup');
+        setConnectingStripe(false);
+      }
+    } catch (error) {
+      console.error(error);
+      setConnectingStripe(false);
+    }
+  };
+
+  // Opens the cook's Stripe Express dashboard to update bank / payout info
+  const manageStripePayments = async () => {
+    if (!user) return;
+    setConnectingStripe(true);
+    try {
+      const res = await fetch('/api/stripe/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ intent: 'manage' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+      } else {
+        showToast(data.error || 'Could not open payment settings');
         setConnectingStripe(false);
       }
     } catch (error) {
@@ -3755,6 +3778,50 @@ export default function Home() {
                 </button>
               )}
             </div>
+
+            {/* Payments: cooks connect their bank here (Stripe Express) or open
+                their Stripe dashboard to update bank / payout details. */}
+            {user.seller_status === 'approved' && (
+              <div style={{ background: C.card, padding: 14, borderRadius: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <span style={{ font: `400 14px ${font.sans}`, color: C.inkSoft, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CreditCard size={16} /> Payments
+                  </span>
+                  {user.stripe_charges_enabled ? (
+                    <span style={{ font: `500 12px ${font.sans}`, color: C.green, background: C.greenLight, padding: '4px 10px', borderRadius: 10 }}>Connected</span>
+                  ) : (
+                    <span style={{ font: `500 12px ${font.sans}`, color: C.terracotta, background: C.terracottaLight, padding: '4px 10px', borderRadius: 10 }}>Not connected</span>
+                  )}
+                </div>
+                {user.stripe_charges_enabled ? (
+                  <>
+                    <div style={{ font: `400 12.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 10 }}>
+                      Bank connected{user.stripe_payouts_enabled ? ' · payouts enabled' : ' · payouts pending verification'}. Manage your bank account and payout details in Stripe.
+                    </div>
+                    <button
+                      onClick={manageStripePayments}
+                      disabled={connectingStripe}
+                      style={{ width: '100%', padding: 10, background: C.cardAlt, color: C.ink, borderRadius: 10, font: `500 14px ${font.sans}`, opacity: connectingStripe ? 0.6 : 1 }}
+                    >
+                      {connectingStripe ? 'Opening…' : 'Update payment information'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ font: `400 12.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 10 }}>
+                      Connect your bank to get paid when orders come in. Secure setup through Stripe.
+                    </div>
+                    <button
+                      onClick={connectStripePayments}
+                      disabled={connectingStripe}
+                      style={{ width: '100%', padding: 10, background: C.green, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, opacity: connectingStripe ? 0.6 : 1 }}
+                    >
+                      {connectingStripe ? 'Connecting…' : 'Connect bank'}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* Legal footer */}
             <div style={{ padding: '18px 0 0', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
