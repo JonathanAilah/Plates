@@ -656,7 +656,7 @@ export async function getOrders(buyerId: number) {
            o.created_at, o.updated_at, o.pickup_at, o.side_choice,
            COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
            d.photo_url as dish_photo_url, d.price as dish_price,
-           u.id as seller_id, COALESCE(u.name, 'Former cook') as seller_name,
+           u.id as seller_id, COALESCE(u.name, 'Deleted cook') as seller_name,
            COALESCE(u.avatar, '?') as seller_avatar,
            u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
@@ -853,30 +853,16 @@ export async function deleteUserCompletely(userId: number): Promise<{
   }
   const totalRefunded = refundedOrderCount + openBuyerOrders.rows.length;
 
-  // 4. Snapshot buyer name/email onto every order they placed, so accounting
-  //    still reads. buyer_id will be nulled by the FK ON DELETE SET NULL
-  //    when the user row is deleted below.
-  await sql`
-    UPDATE orders
-       SET buyer_name_snapshot  = ${user.name},
-           buyer_email_snapshot = ${user.email},
-           deleted_at           = CURRENT_TIMESTAMP
-     WHERE buyer_id = ${userId}
-  `;
+  // 4. Orders are deliberately PRESERVED (the money trail: totals, platform
+  //    fee, cook earnings, seller_id). No PII snapshots are written — after
+  //    the user row is gone, every order list LEFT JOINs users/dishes and
+  //    labels the missing party "Deleted user" / "Deleted cook".
+  //    (This step previously wrote to snapshot columns that no migration
+  //    ever created, so the whole delete crashed here and the user row
+  //    survived — which is why deleted users could sign back in and find
+  //    their old profile intact.)
 
-  // 5. Snapshot dish name/price onto every order for their dishes, so the
-  //    money row survives after dishes are deleted below.
-  await sql`
-    UPDATE orders
-       SET dish_name_snapshot  = d.name,
-           dish_price_snapshot = d.price,
-           deleted_at          = COALESCE(orders.deleted_at, CURRENT_TIMESTAMP)
-      FROM dishes d
-     WHERE orders.dish_id = d.id
-       AND d.seller_id = ${userId}
-  `;
-
-  // 6. Collect Blob URLs we'll need to delete from storage AFTER db work.
+  // 5. Collect Blob URLs we'll need to delete from storage AFTER db work.
   //    Three columns hold Blob URLs: users.photo_url, dishes.photo_url, posts.photo_url.
   const blobUrls: string[] = [];
   if (user.photo_url) blobUrls.push(user.photo_url);
@@ -891,11 +877,11 @@ export async function deleteUserCompletely(userId: number): Promise<{
   `;
   for (const row of postPhotos.rows) blobUrls.push(row.photo_url);
 
-  // 7. Delete dependent rows that we don't need to preserve.
+  // 6. Delete dependent rows that we don't need to preserve.
   //    Order matters: children of dishes/posts before dishes/posts themselves.
-  //    Skip 'orders' — those are preserved via SET NULL + snapshots.
-  //    Skip 'messages' — will keep those tied to preserved orders (sender_id
-  //    stays as it is; if you'd rather null it, we can add a snapshot later).
+  //    Skip 'orders' (money trail) and 'cook_withdrawals' (payout ledger —
+  //    needed to reconcile the platform's Stripe balance even after the
+  //    cook is gone).
   await sql`DELETE FROM dish_reviews  WHERE buyer_id = ${userId} OR dish_id IN (SELECT id FROM dishes WHERE seller_id = ${userId})`;
   await sql`DELETE FROM dish_likes    WHERE user_id  = ${userId} OR dish_id IN (SELECT id FROM dishes WHERE seller_id = ${userId})`;
   await sql`DELETE FROM cart_items    WHERE buyer_id = ${userId} OR dish_id IN (SELECT id FROM dishes WHERE seller_id = ${userId})`;
@@ -905,19 +891,20 @@ export async function deleteUserCompletely(userId: number): Promise<{
   await sql`DELETE FROM pickup_hours  WHERE user_id = ${userId}`;
   await sql`DELETE FROM push_subscriptions WHERE user_id = ${userId}`;
 
-  // 8. Delete their dishes and posts. Orders referencing them will have
-  //    dish_id nulled by the FK; snapshots from step 5 preserve the info.
+  // 7. Delete their dishes and posts. Their orders keep dangling dish ids;
+  //    order lists LEFT JOIN dishes and label those rows "Deleted dish".
   await sql`DELETE FROM dishes WHERE seller_id = ${userId}`;
   await sql`DELETE FROM posts  WHERE user_id  = ${userId}`;
 
-  // 9. Count what survived on the orders side for the response.
+  // 8. Count the preserved money records for the response.
   const preservedCount = await sql`
     SELECT COUNT(*)::int AS c FROM orders
-     WHERE buyer_name_snapshot  IS NOT NULL AND buyer_email_snapshot = ${user.email}
-        OR (dish_name_snapshot  IS NOT NULL AND dish_id IS NULL)
+    WHERE buyer_id = ${userId} OR seller_id = ${userId}
   `;
 
-  // 10. Finally, delete the user row itself. FK SET NULL fires on orders.
+  // 9. Finally, delete the user row itself. A fresh signup with the same
+  //    email now creates a brand-new profile instead of reattaching to
+  //    this one via createUserFromClerk's ON CONFLICT (email) clause.
   await sql`DELETE FROM users WHERE id = ${userId}`;
 
   return {
@@ -934,7 +921,7 @@ export async function getSellerOrders(sellerId: number) {
            o.created_at, o.updated_at, o.pickup_at, o.side_choice,
            COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
            d.photo_url as dish_photo_url,
-           COALESCE(u.name, 'Former user') as buyer_name, COALESCE(u.avatar, '?') as buyer_avatar,
+           COALESCE(u.name, 'Deleted user') as buyer_name, COALESCE(u.avatar, '?') as buyer_avatar,
            u.photo_url as buyer_photo_url
     FROM orders o
     LEFT JOIN dishes d ON o.dish_id = d.id
@@ -1519,7 +1506,7 @@ export async function getAdminUserOrders(userId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
            o.created_at, COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
-           COALESCE(b.name, 'Former user') as buyer_name, COALESCE(s.name, 'Former cook') as seller_name, o.seller_id
+           COALESCE(b.name, 'Deleted user') as buyer_name, COALESCE(s.name, 'Deleted cook') as seller_name, o.seller_id
     FROM orders o
     LEFT JOIN dishes d ON o.dish_id = d.id
     LEFT JOIN users b ON o.buyer_id = b.id
@@ -1619,8 +1606,8 @@ export async function getAllOrdersForAdmin(opts: AdminOrdersListOptions = {}) {
     `SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
             o.created_at, o.pickup_at, o.side_choice,
             COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
-            b.id as buyer_id, COALESCE(b.name, 'Former user') as buyer_name,
-            o.seller_id, COALESCE(s.name, 'Former cook') as seller_name, s.kitchen_name as seller_kitchen_name
+            b.id as buyer_id, COALESCE(b.name, 'Deleted user') as buyer_name,
+            o.seller_id, COALESCE(s.name, 'Deleted cook') as seller_name, s.kitchen_name as seller_kitchen_name
      FROM orders o
      LEFT JOIN dishes d ON o.dish_id = d.id
      LEFT JOIN users b ON o.buyer_id = b.id
@@ -1674,15 +1661,17 @@ export async function getAllCooksForAdminPayouts(opts: AdminCookPayoutsListOptio
     params,
   );
 
-  // Orders whose seller can no longer be determined (dish deleted before
-  // seller snapshots existed). Surfaced so the list still reconciles with
-  // the Financials totals.
+  // Orders that can't appear under any cook row above: seller unknown (dish
+  // deleted before seller snapshots existed) or the cook's account has been
+  // deleted. Surfaced so the list still reconciles with the Financials totals.
   const unattributed = await sql`
-    SELECT COALESCE(SUM(cook_earnings), 0) as cook_earnings,
-           COALESCE(SUM(total_price), 0) as total_sales,
+    SELECT COALESCE(SUM(o.cook_earnings), 0) as cook_earnings,
+           COALESCE(SUM(o.total_price), 0) as total_sales,
            COUNT(*)::int as order_count
-    FROM orders
-    WHERE seller_id IS NULL AND status != 'cancelled'
+    FROM orders o
+    WHERE o.status != 'cancelled'
+      AND (o.seller_id IS NULL
+           OR NOT EXISTS (SELECT 1 FROM users u WHERE u.id = o.seller_id))
   `;
 
   return { cooks: result.rows, unattributed: unattributed.rows[0] };
@@ -1719,7 +1708,7 @@ export async function getCookPayoutDetail(
     SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
            o.created_at, o.pickup_at, o.side_choice,
            COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
-           COALESCE(b.name, 'Former user') as buyer_name
+           COALESCE(b.name, 'Deleted user') as buyer_name
     FROM orders o
     LEFT JOIN dishes d ON o.dish_id = d.id
     LEFT JOIN users b ON o.buyer_id = b.id
@@ -1732,7 +1721,7 @@ export async function getCookPayoutDetail(
     SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
            o.created_at, o.pickup_at, o.updated_at, o.side_choice,
            COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
-           COALESCE(b.name, 'Former user') as buyer_name
+           COALESCE(b.name, 'Deleted user') as buyer_name
     FROM orders o
     LEFT JOIN dishes d ON o.dish_id = d.id
     LEFT JOIN users b ON o.buyer_id = b.id
