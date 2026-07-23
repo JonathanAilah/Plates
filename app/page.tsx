@@ -603,6 +603,9 @@ export default function Home() {
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
   const [showingDirections, setShowingDirections] = useState(false);
   const [tripInfo, setTripInfo] = useState<{ distanceText: string; durationText: string } | null>(null);
+  // In-app turn-by-turn on the order-detail screen
+  const [navMode, setNavMode] = useState(false);
+  const [navInfo, setNavInfo] = useState<{ instruction: string; stepDistanceText: string; remainingDistanceText: string; remainingDurationText: string; arrived: boolean } | null>(null);
   const [checkoutSecrets, setCheckoutSecrets] = useState<string[]>([]);
   const [checkoutTotalLabel, setCheckoutTotalLabel] = useState('');
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
@@ -1611,6 +1614,15 @@ export default function Home() {
     loadDishesPage(0, true, { lat: user.latitude, lng: user.longitude });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.latitude, user?.longitude, nearbyRadiusMi]);
+
+  // End in-app navigation whenever the user leaves the order-detail screen
+  useEffect(() => {
+    if (screen !== 'order-detail' && navMode) {
+      setNavMode(false);
+      setNavInfo(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
 
   // Pricing (tax/service fee) is only fetched once at boot, so a long-lived
   // tab won't pick up an admin's later change on its own. Refresh it whenever
@@ -4979,11 +4991,31 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Map + directions (when ready) */}
+              {/* Map + in-app navigation */}
               {o.seller_latitude != null && o.seller_longitude != null && (
                 <div style={{ padding: '14px 22px 0' }}>
+                  {/* Current-instruction banner while navigating */}
+                  {navMode && (
+                    <div style={{ background: navInfo?.arrived ? C.green : C.ink, color: '#fff', borderRadius: 14, padding: '14px 16px', marginBottom: 10 }}>
+                      {navInfo ? (
+                        <>
+                          <div style={{ font: `500 17px/1.25 ${font.serif}` }}>
+                            {navInfo.arrived ? 'You have arrived — grab your plate! 🎉' : navInfo.instruction}
+                          </div>
+                          {!navInfo.arrived && navInfo.stepDistanceText && (
+                            <div style={{ font: `400 12.5px ${font.sans}`, opacity: .8, marginTop: 4 }}>
+                              for {navInfo.stepDistanceText}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{ font: `500 14px ${font.sans}` }}>Getting your location…</div>
+                      )}
+                    </div>
+                  )}
+
                   <MapView
-                    height={200}
+                    height={navMode ? 340 : 200}
                     radius={14}
                     centerLat={o.seller_latitude}
                     centerLng={o.seller_longitude}
@@ -4997,17 +5029,54 @@ export default function Home() {
                       emoji: o.dish_emoji,
                     }]}
                     zoom={14}
-                    interactive={false}
-                  />
-                  <button
-                    onClick={() => {
-                      const dest = `${o.seller_latitude},${o.seller_longitude}`;
-                      window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest}`, '_blank');
+                    interactive={navMode}
+                    navigationMode={navMode}
+                    onNavUpdate={(nav) => {
+                      if (nav === null) {
+                        showToast('Could not start navigation — check location permission');
+                        setNavMode(false);
+                        setNavInfo(null);
+                      } else {
+                        setNavInfo(nav);
+                      }
                     }}
-                    style={{ marginTop: 10, width: '100%', background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 12, padding: 12, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-                  >
-                    <Navigation size={15} /> Get directions
-                  </button>
+                  />
+
+                  {navMode ? (
+                    <>
+                      {navInfo && !navInfo.arrived && (
+                        <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center', gap: 8, font: `500 14px ${font.sans}`, color: C.ink }}>
+                          <span>{navInfo.remainingDurationText}</span>
+                          <span style={{ color: C.mutedLight }}>·</span>
+                          <span>{navInfo.remainingDistanceText}</span>
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button
+                          onClick={() => { setNavMode(false); setNavInfo(null); }}
+                          style={{ flex: 1, background: C.card, border: `1px solid ${C.divider}`, color: '#c94b4b', borderRadius: 12, padding: 12, font: `500 13px ${font.sans}` }}
+                        >
+                          End navigation
+                        </button>
+                        <button
+                          onClick={() => {
+                            const dest = `${o.seller_latitude},${o.seller_longitude}`;
+                            window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest}&travelmode=driving`, '_blank');
+                          }}
+                          style={{ flex: 1, background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 12, padding: 12, font: `500 13px ${font.sans}` }}
+                        >
+                          🔊 Voice (Google Maps)
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => { setNavInfo(null); setNavMode(true); }}
+                      style={{ marginTop: 10, width: '100%', background: C.terracotta, color: '#fff', borderRadius: 12, padding: 12, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                    >
+                      <Navigation size={15} /> Get directions
+                    </button>
+                  )}
                 </div>
               )}
 
