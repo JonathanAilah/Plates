@@ -334,6 +334,13 @@ export default function Home() {
   const [dishOffset, setDishOffset] = useState(0);
   const [dishHasMore, setDishHasMore] = useState(false);
   const [loadingMoreDishes, setLoadingMoreDishes] = useState(false);
+  const [nearbyRadiusMi, setNearbyRadiusMi] = useState<number>(NEARBY_RADIUS_MI);
+  const [showNearbyPanel, setShowNearbyPanel] = useState(false);
+  // Server-side search results (whole catalog), separate from the nearby feed.
+  const [searchResults, setSearchResults] = useState<Dish[]>([]);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [orders, setOrders] = useState<BuyerOrder[]>([]);
   const [cookOrders, setCookOrders] = useState<CookOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<BuyerOrder | null>(null);
@@ -367,7 +374,7 @@ export default function Home() {
     if (loc) {
       params.set('lat', String(loc.lat));
       params.set('lng', String(loc.lng));
-      params.set('radiusMi', String(NEARBY_RADIUS_MI));
+      params.set('radiusMi', String(nearbyRadiusMi));
     }
     const res = await fetch(`/api/dishes?${params.toString()}`);
     const data = res.ok ? await res.json() : [];
@@ -387,6 +394,35 @@ export default function Home() {
       console.error('Load more dishes error:', e);
     } finally {
       setLoadingMoreDishes(false);
+    }
+  };
+
+  // Server-side search across the whole catalog (not just loaded pages). Runs
+  // without a radius so matches anywhere are found; distance is still shown
+  // client-side from the seller's coordinates. Paginated like the feed.
+  const runSearch = async (query: string, offset: number, replace: boolean): Promise<void> => {
+    const params = new URLSearchParams();
+    params.set('action', 'getAll');
+    params.set('search', query);
+    params.set('limit', String(DISH_PAGE_SIZE));
+    params.set('offset', String(offset));
+    const res = await fetch(`/api/dishes?${params.toString()}`);
+    const data = res.ok ? await res.json() : [];
+    const arr: Dish[] = Array.isArray(data) ? data : [];
+    setSearchResults(prev => (replace ? arr : [...prev, ...arr]));
+    setSearchHasMore(arr.length === DISH_PAGE_SIZE);
+    setSearchOffset(offset + arr.length);
+  };
+
+  const loadMoreSearch = async () => {
+    if (searchLoading) return;
+    setSearchLoading(true);
+    try {
+      await runSearch(searchQuery.trim(), searchOffset, false);
+    } catch (e) {
+      console.error('Load more search error:', e);
+    } finally {
+      setSearchLoading(false);
     }
   };
 
@@ -1231,14 +1267,32 @@ export default function Home() {
     initApp();
   }, []);
 
-  // Once the viewer's location is known (or changes), reload the dish feed
-  // filtered to cooks within NEARBY_RADIUS_MI. Keeps the query bounded instead
-  // of fetching every dish in the marketplace.
+  // Once the viewer's location is known (or the chosen radius changes), reload
+  // the dish feed filtered to cooks within nearbyRadiusMi. Keeps the query
+  // bounded instead of fetching every dish in the marketplace.
   useEffect(() => {
     if (user?.latitude == null || user?.longitude == null) return;
     loadDishesPage(0, true, { lat: user.latitude, lng: user.longitude });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.latitude, user?.longitude]);
+  }, [user?.latitude, user?.longitude, nearbyRadiusMi]);
+
+  // Debounced server-side search. Empty query clears results and the feed
+  // falls back to the nearby list.
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchHasMore(false);
+      setSearchOffset(0);
+      return;
+    }
+    setSearchLoading(true);
+    const t = setTimeout(() => {
+      runSearch(q, 0, true).finally(() => setSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
 
   useEffect(() => {
     if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
@@ -1984,13 +2038,10 @@ export default function Home() {
   const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length;
 
   const filteredDishes = React.useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return dishes.filter(d => {
-      if (q) {
-        const nameMatch = d.name.toLowerCase().includes(q);
-        const cookMatch = (d.seller_name || '').toLowerCase().includes(q);
-        if (!nameMatch && !cookMatch) return false;
-      }
+    // When searching, results come from the server (whole catalog); otherwise
+    // refine the nearby feed. Remaining filters apply client-side either way.
+    const source = searchQuery.trim() ? searchResults : dishes;
+    return source.filter(d => {
       if (distanceFilter !== 'any') {
         // If user isn't loaded / has no location, distance filter can't match anything
         if (!user || user.latitude == null || user.longitude == null || d.seller_latitude == null || d.seller_longitude == null) return false;
@@ -2012,7 +2063,7 @@ export default function Home() {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dishes, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user?.latitude, user?.longitude]);
+  }, [dishes, searchResults, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user?.latitude, user?.longitude]);
 
   const isFiltering = searchQuery.trim().length > 0 || activeFilterCount > 0;
 
@@ -2380,10 +2431,13 @@ export default function Home() {
               <div style={{ font: `500 25px/1 ${font.serif}`, color: C.terracotta, letterSpacing: '-.01em' }}>Plates</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 {user.latitude != null && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.cardAlt, padding: '7px 11px', borderRadius: 20, font: `500 12px ${font.sans}`, color: C.inkSoft }}>
+                  <button
+                    onClick={() => setShowNearbyPanel(true)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.cardAlt, padding: '7px 11px', borderRadius: 20, font: `500 12px ${font.sans}`, color: C.inkSoft }}
+                  >
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.green }} />
-                    Nearby ▾
-                  </div>
+                    Within {nearbyRadiusMi < 1 ? nearbyRadiusMi.toFixed(1) : Math.round(nearbyRadiusMi)} mi ▾
+                  </button>
                 )}
                 {user.role === 'admin' && (
                   <button onClick={() => setScreen('admin')} style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', background: (adminStats && adminStats.pending > 0) ? C.terracotta : C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: (adminStats && adminStats.pending > 0) ? '#fff' : C.inkSoft }}>
@@ -2625,7 +2679,18 @@ export default function Home() {
                 </div>
               )}
 
-              {feedView === 'list' && !isFiltering && dishHasMore && (
+              {feedView === 'list' && searchQuery.trim() && searchHasMore && (
+                <div style={{ padding: '4px 20px 8px' }}>
+                  <button
+                    onClick={loadMoreSearch}
+                    disabled={searchLoading}
+                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                  >
+                    {searchLoading ? 'Loading…' : 'Load more results'}
+                  </button>
+                </div>
+              )}
+              {feedView === 'list' && !searchQuery.trim() && activeFilterCount === 0 && dishHasMore && (
                 <div style={{ padding: '4px 20px 8px' }}>
                   <button
                     onClick={loadMoreDishes}
@@ -5163,6 +5228,80 @@ export default function Home() {
 
               <button
                 onClick={() => setShowRadiusPanel(false)}
+                style={{ width: '100%', padding: 14, background: C.terracotta, color: '#fff', borderRadius: 14, font: `500 14px ${font.sans}`, marginTop: 18 }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================= NEARBY RADIUS PANEL (Discover dish feed) ================= */}
+        {showNearbyPanel && (
+          <div
+            onClick={() => setShowNearbyPanel(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(30,15,5,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1400, animation: 'plfade .25s ease' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ background: C.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 22px 24px', width: '100%', maxWidth: 430, boxShadow: '0 -8px 30px rgba(0,0,0,.2)' }}
+            >
+              <div style={{ width: 44, height: 4, background: C.divider, borderRadius: 2, margin: '0 auto 14px' }} />
+              <div style={{ font: `500 18px ${font.serif}`, color: C.ink, marginBottom: 4 }}>How far should we look?</div>
+              <div style={{ font: `400 12.5px ${font.sans}`, color: C.muted, marginBottom: 18 }}>
+                Only show dishes from cooks within this distance.
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 12 }}>
+                <div style={{ font: `600 40px ${font.serif}`, color: C.terracotta, lineHeight: 1 }}>
+                  {nearbyRadiusMi < 1 ? nearbyRadiusMi.toFixed(1) : Math.round(nearbyRadiusMi)}
+                </div>
+                <div style={{ font: `500 14px ${font.sans}`, color: C.muted }}>miles</div>
+              </div>
+
+              <input
+                type="range"
+                min={0.5}
+                max={50}
+                step={0.5}
+                value={nearbyRadiusMi}
+                onChange={(e) => setNearbyRadiusMi(parseFloat(e.target.value))}
+                style={{ width: '100%', accentColor: C.terracotta }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, font: `400 10.5px ${font.sans}`, color: C.muted }}>
+                <span>0.5 mi</span>
+                <span>10 mi</span>
+                <span>25 mi</span>
+                <span>50 mi</span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, marginTop: 16, flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Walk (0.5)', val: 0.5 },
+                  { label: 'Bike (2)', val: 2 },
+                  { label: 'Nearby (10)', val: 10 },
+                  { label: 'Cross-town (15)', val: 15 },
+                  { label: 'Metro (50)', val: 50 },
+                ].map(p => (
+                  <button
+                    key={p.val}
+                    onClick={() => setNearbyRadiusMi(p.val)}
+                    style={{
+                      padding: '7px 12px',
+                      background: nearbyRadiusMi === p.val ? C.ink : C.surface,
+                      color: nearbyRadiusMi === p.val ? '#fff' : C.inkSoft,
+                      border: `1px solid ${nearbyRadiusMi === p.val ? C.ink : C.divider}`,
+                      borderRadius: 16,
+                      font: `500 11.5px ${font.sans}`,
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setShowNearbyPanel(false)}
                 style={{ width: '100%', padding: 14, background: C.terracotta, color: '#fff', borderRadius: 14, font: `500 14px ${font.sans}`, marginTop: 18 }}
               >
                 Done
