@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getUnreadCounts, getOrdersVersion, getMessagesVersion,
-  getPendingSellersCount, getOrderIfParticipant,
+  getPendingSellersCount, getOrderIfParticipant, getActiveOrdersCount,
 } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const chatOrderId = searchParams.get('chatOrderId');
 
-    const [unread, ordersVersion, adminPending, chatVersion] = await Promise.all([
+    const [unread, ordersVersion, adminPending, chatVersion, activeOrders] = await Promise.all([
       getUnreadCounts(me.id),
       getOrdersVersion(me.id),
       me.role === 'admin' ? getPendingSellersCount() : Promise.resolve(null),
@@ -28,9 +28,10 @@ export async function GET(request: NextRequest) {
         ? getOrderIfParticipant(chatOrderId, me.id).then(order =>
             order ? getMessagesVersion(chatOrderId) : null)
         : Promise.resolve(null),
+      getActiveOrdersCount(me.id),
     ]);
 
-    return NextResponse.json({ unread, ordersVersion, adminPending, chatVersion });
+    return NextResponse.json({ unread, ordersVersion, adminPending, chatVersion, activeOrders });
   } catch (error) {
     console.error('Sync error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

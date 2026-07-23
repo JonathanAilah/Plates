@@ -1283,6 +1283,17 @@ export async function updatePlatformSettings(input: Partial<PlatformSettings>): 
 // A changed version means "refetch the real data"; an unchanged one means
 // the poll cost was a single tiny indexed aggregate instead of a full fetch.
 
+// Orders currently in flight for this user (as buyer or cook). Used by the
+// welcome fork to skip itself when the user is mid-order.
+export async function getActiveOrdersCount(userId: number): Promise<number> {
+  const result = await sql`
+    SELECT COUNT(*)::int AS c FROM orders
+    WHERE (buyer_id = ${userId} OR seller_id = ${userId})
+      AND status NOT IN ('picked_up', 'cancelled')
+  `;
+  return result.rows[0].c;
+}
+
 export async function getOrdersVersion(userId: number): Promise<string> {
   const result = await sql`
     SELECT COUNT(*)::int AS count, COALESCE(MAX(o.updated_at)::text, '') AS latest

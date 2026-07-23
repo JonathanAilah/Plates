@@ -6,6 +6,7 @@ import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from 
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
 import MarketingIntro from '@/components/MarketingIntro';
+import WelcomeChooser from '@/components/WelcomeChooser';
 
 // Heavy, screen-specific components (Leaflet map, Stripe checkout, address
 // autocomplete) are code-split out of the initial bundle and loaded on demand.
@@ -436,6 +437,58 @@ export default function Home() {
     try { window.localStorage.setItem('plates_intro_seen', '1'); } catch {}
     setShowIntro(false);
   };
+
+  // Signed-in welcome fork ("Ready to cook?" / "Can we fix you a plate?").
+  // Shown on every app open while the data loads underneath; the choice
+  // routes to the kitchen or the feed. Replaces the anonymous marketing
+  // intro the moment Clerk confirms the visitor is signed in.
+  const [showWelcome, setShowWelcome] = useState(false);
+  const [welcomeChoice, setWelcomeChoice] = useState<'kitchen' | 'feed' | null>(null);
+  // Mirror of welcomeChoice for the sync loop's closure (auto-dismiss must
+  // never override a choice the user already tapped).
+  const welcomeChoiceRef = useRef<'kitchen' | 'feed' | null>(null);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (isSignedIn) {
+      setShowIntro(false);
+      // Show at most once per day, and not when the user is mid-order (per
+      // the active-order snapshot from their last session — the live sync
+      // check below also dismisses if a fresh active order turns up).
+      try {
+        const today = new Date().toDateString();
+        if (window.localStorage.getItem('plates_welcome_last_shown') === today) return;
+        const activeSnapshot = parseInt(window.localStorage.getItem('plates_active_orders') || '0', 10);
+        if (activeSnapshot > 0) return;
+        window.localStorage.setItem('plates_welcome_last_shown', today);
+      } catch { /* storage unavailable — just show it */ }
+      setShowWelcome(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded, isSignedIn]);
+
+  const routeWelcome = (dest: 'kitchen' | 'feed') => {
+    setScreen(dest === 'kitchen' ? 'seller-dashboard' : 'feed');
+    setShowWelcome(false);
+    setWelcomeChoice(null);
+    welcomeChoiceRef.current = null;
+  };
+
+  const handleWelcomeChoose = (dest: 'kitchen' | 'feed') => {
+    welcomeChoiceRef.current = dest;
+    if (loading) {
+      // App still booting — remember the choice; the effect below routes
+      // the moment data is in. The overlay shows "Setting the table…".
+      setWelcomeChoice(dest);
+    } else {
+      routeWelcome(dest);
+    }
+  };
+
+  useEffect(() => {
+    if (!loading && welcomeChoice) routeWelcome(welcomeChoice);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, welcomeChoice]);
 
   // The viewer's location for the dish feed, or null if unknown (anonymous or
   // location not yet granted). When null, the feed falls back to newest-first.
@@ -1645,6 +1698,16 @@ export default function Home() {
         const data = await res.json();
         if (cancelled) return;
 
+        // Active-order tracking for the welcome fork: snapshot for the next
+        // visit's instant decision, and dismiss the fork mid-splash if a
+        // live active order turns up (unless the user already chose a path).
+        if (typeof data.activeOrders === 'number') {
+          try { window.localStorage.setItem('plates_active_orders', String(data.activeOrders)); } catch {}
+          if (data.activeOrders > 0 && !welcomeChoiceRef.current) {
+            setShowWelcome(false);
+          }
+        }
+
         // Unread badges (previously its own 10s poll)
         if (Array.isArray(data.unread)) {
           const map: Record<string, number> = {};
@@ -2533,6 +2596,8 @@ export default function Home() {
         {/* First-time visitors see the marketing intro instantly (static, no
             data needed) while the app boots underneath. */}
         {showIntro && <MarketingIntro onDone={dismissIntro} />}
+        {/* Signed-in visitors get the welcome fork instead. */}
+        {showWelcome && <WelcomeChooser ready={false} onChoose={handleWelcomeChoose} />}
       </div>
     );
   }
@@ -2848,6 +2913,10 @@ export default function Home() {
   return (
     <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
       <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative' }}>
+
+        {/* Welcome fork stays up until the user picks a path (kitchen / feed),
+            even if the app finished loading first. */}
+        {showWelcome && <WelcomeChooser ready={!loading} onChoose={handleWelcomeChoose} />}
 
         {/* ================= TERMS ACCEPTANCE MODAL (blocking) ================= */}
         {needsTermsAcceptance && (
