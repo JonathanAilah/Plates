@@ -1444,6 +1444,17 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.latitude, user?.longitude, nearbyRadiusMi]);
 
+  // Pricing (tax/service fee) is only fetched once at boot, so a long-lived
+  // tab won't pick up an admin's later change on its own. Refresh it whenever
+  // the cart opens — cheap, and it's the screen where the numbers actually
+  // show up. Don't touch tipAmount here: the buyer may have already edited it.
+  useEffect(() => {
+    if (screen !== 'cart') return;
+    fetch('/api/settings').then(r => r.ok ? r.json() : null).then(s => {
+      if (s && Number.isFinite(Number(s.serviceFeePercent))) setFeeSettings(s);
+    }).catch(() => {});
+  }, [screen]);
+
   // Debounced server-side search. Empty query clears results and the feed
   // falls back to the nearby list.
   useEffect(() => {
