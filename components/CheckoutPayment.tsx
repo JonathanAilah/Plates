@@ -43,7 +43,9 @@ function PaymentForm({
       const { error: confirmError } = await stripe.confirmPayment({
         elements: isFirst ? elements : undefined,
         clientSecret: secret,
-        confirmParams: {},
+        confirmParams: {
+          return_url: `${window.location.origin}/`,
+        },
         redirect: 'if_required',
       });
       if (confirmError) {
