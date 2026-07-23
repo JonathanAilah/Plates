@@ -326,6 +326,21 @@ function parseHoursRange(text: string | null | undefined): { start: number; end:
   return { start, end };
 }
 
+// minutes since midnight -> "HH:MM"
+function minutesToHHMM(min: number): string {
+  return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+}
+
+// Pretty-print a canonical "HH:MM-HH:MM" cooking-hours value
+// ("17:00-20:00" -> "5:00 PM – 8:00 PM"). Legacy free-text values saved
+// before hours became structured are returned unchanged.
+function formatCookingHours(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const m = text.match(/^(\d{2}:\d{2})-(\d{2}:\d{2})$/);
+  if (!m) return text;
+  return `${formatHHMM(m[1])} – ${formatHHMM(m[2])}`;
+}
+
 async function uploadImage(file: File): Promise<string | null> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -552,7 +567,9 @@ export default function Home() {
   const [cpKitchenEnvironment, setCpKitchenEnvironment] = useState<string>('');
   const [cpPickupMin, setCpPickupMin] = useState<number>(15);
   const [cpPickupMax, setCpPickupMax] = useState<number>(120);
-  const [cpCookingHours, setCpCookingHours] = useState('');
+  // Structured cooking hours (HH:MM). Stored canonically as "HH:MM-HH:MM".
+  const [cpCookStart, setCpCookStart] = useState('');
+  const [cpCookEnd, setCpCookEnd] = useState('');
   const [cpPickupDesc, setCpPickupDesc] = useState('');
   const [cpSaving, setCpSaving] = useState(false);
 
@@ -1863,7 +1880,7 @@ export default function Home() {
       // Validate against the cook's stated cooking hours when parseable
       const hours = parseHoursRange(user.cooking_hours);
       if (hours && (hhmmToMinutes(sellStart) < hours.start || hhmmToMinutes(sellEnd) > hours.end)) {
-        showToast(`Selling window must fall within your cooking hours (${user.cooking_hours})`);
+        showToast(`Selling window must fall within your cooking hours (${formatCookingHours(user.cooking_hours)})`);
         return;
       }
     }
@@ -2250,7 +2267,11 @@ export default function Home() {
     setCpCottage(!!user.cottage_food_attested);
     setCpHasPermit(user.has_permit);
     setCpPermitNumber(user.permit_number || '');
-    setCpCookingHours(user.cooking_hours || '');
+    // Prefill the structured pickers; legacy free-text values that contain a
+    // recognizable range (e.g. "Weekdays 11am–7pm") migrate automatically.
+    const cookHours = parseHoursRange(user.cooking_hours);
+    setCpCookStart(cookHours ? minutesToHHMM(cookHours.start) : '');
+    setCpCookEnd(cookHours ? minutesToHHMM(cookHours.end) : '');
     setCpPickupDesc(user.pickup_description || '');
     setCpKitchenEnvironment(user.kitchen_environment || '');
     setCpPickupMin(user.pickup_min_minutes ?? 15);
@@ -2265,6 +2286,14 @@ export default function Home() {
 
   const saveCookProfile = async () => {
     if (!user) return;
+    if ((cpCookStart && !cpCookEnd) || (!cpCookStart && cpCookEnd)) {
+      showToast('Set both a start and end for your cooking hours');
+      return;
+    }
+    if (cpCookStart && cpCookEnd && cpCookStart >= cpCookEnd) {
+      showToast('Cooking hours must start before they end');
+      return;
+    }
     setCpSaving(true);
     try {
       const flags = [
@@ -2286,7 +2315,7 @@ export default function Home() {
           permitNumber: cpPermitNumber || null,
           kitchenFlags: flags || null,
           kitchenEnvironment: cpKitchenEnvironment || null,
-          cookingHours: cpCookingHours || null,
+          cookingHours: cpCookStart && cpCookEnd ? `${cpCookStart}-${cpCookEnd}` : null,
           pickupDescription: cpPickupDesc || null,
           pickupMinMinutes: cpPickupMin,
           pickupMaxMinutes: cpPickupMax,
@@ -3387,7 +3416,7 @@ export default function Home() {
                     <div style={{ flex: 1 }}>
                       <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{selectedDish.seller_name}</div>
                       <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
-                        {selectedDish.seller_cooking_hours || 'Home cook'}
+                        {formatCookingHours(selectedDish.seller_cooking_hours) || 'Home cook'}
                       </div>
                     </div>
                     <div style={{ font: `500 11px ${font.sans}`, color: C.terracotta, whiteSpace: 'nowrap' }}>View profile →</div>
@@ -4248,7 +4277,7 @@ export default function Home() {
                     </div>
                     <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 10 }}>
                       {user.cooking_hours
-                        ? `Must fall within your cooking hours: ${user.cooking_hours}`
+                        ? `Must fall within your cooking hours: ${formatCookingHours(user.cooking_hours)}`
                         : 'Buyers can only order during this window. Leave blank to sell all day.'}
                     </div>
                   </>
@@ -4503,7 +4532,19 @@ export default function Home() {
               <div style={{ font: `500 15px ${font.serif}`, color: C.ink, marginBottom: 14 }}>Pickup details</div>
 
               <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>Typical cooking hours</label>
-              <input type="text" value={cpCookingHours} onChange={(e) => setCpCookingHours(e.target.value)} placeholder="Weekdays 11am–7pm" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 12 }} />
+              <div style={{ display: 'flex', gap: 10, marginBottom: 4 }}>
+                <div style={{ flex: 1 }}>
+                  <input type="time" value={cpCookStart} onChange={(e) => setCpCookStart(e.target.value)} style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+                </div>
+                <span style={{ alignSelf: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>to</span>
+                <div style={{ flex: 1 }}>
+                  <input type="time" value={cpCookEnd} onChange={(e) => setCpCookEnd(e.target.value)} style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+                </div>
+              </div>
+              <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 12 }}>
+                The daily window when you cook and sell. Dish selling windows must fall inside it.
+                {user?.cooking_hours && !parseHoursRange(user.cooking_hours) ? ` (Previously: "${user.cooking_hours}")` : ''}
+              </div>
 
               <label style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft, display: 'block', marginBottom: 6 }}>Pickup spot description</label>
               <input type="text" value={cpPickupDesc} onChange={(e) => setCpPickupDesc(e.target.value)} placeholder="Front porch, blue door" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
@@ -4671,7 +4712,7 @@ export default function Home() {
                     <div style={{ flex: 1 }}>
                       <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{o.seller_kitchen_name || o.seller_name}</div>
                       {o.seller_cooking_hours && (
-                        <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>{o.seller_cooking_hours}</div>
+                        <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>{formatCookingHours(o.seller_cooking_hours)}</div>
                       )}
                     </div>
                     {o.status !== 'picked_up' && o.status !== 'cancelled' && (
@@ -5303,7 +5344,7 @@ export default function Home() {
                       </div>
                       <div style={{ padding: 8, background: C.surface, borderRadius: 8 }}>
                         <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>HOURS</div>
-                        <div style={{ color: C.ink }}>{p.cooking_hours || '—'}</div>
+                        <div style={{ color: C.ink }}>{formatCookingHours(p.cooking_hours) || '—'}</div>
                       </div>
                       <div style={{ padding: 8, background: C.surface, borderRadius: 8 }}>
                         <div style={{ color: C.muted, fontSize: 10, marginBottom: 2 }}>ATTESTED</div>
