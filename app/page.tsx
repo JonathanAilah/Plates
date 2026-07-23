@@ -1557,31 +1557,11 @@ export default function Home() {
           // Kick off the unreviewed-orders prompt (only if the user has completed orders waiting)
           setTimeout(() => { checkForUnreviewedOrders(); }, 800);
 
-          // Refresh the user's CURRENT location on every app open. This used
-          // to run only when latitude was null — but the cook-onboarding flow
-          // wrote the kitchen address into the same columns, so the location
-          // froze at the kitchen forever and the app never asked again.
-          // Kitchen coordinates now live in their own columns; these are the
-          // live ones (blue dot, distances, nearby radius).
-          if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-              async (pos) => {
-                const { latitude, longitude } = pos.coords;
-                // Apply locally right away so the blue dot and distances are
-                // correct without waiting on the server round-trip.
-                setUser(prev => (prev ? { ...prev, latitude, longitude } : prev));
-                try {
-                  await fetch('/api/users', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
-                  });
-                } catch (e) { console.error(e); }
-              },
-              () => { /* denied or unavailable — keep last known */ },
-              { timeout: 8000, maximumAge: 120000 }
-            );
-          }
+          // Refresh the user's CURRENT location on app open. (It used to run
+          // only when latitude was null — but cook onboarding wrote the
+          // kitchen address into the same columns, so the location froze at
+          // the kitchen forever. Kitchen coords now live separately.)
+          refreshLiveLocation();
 
           // Deep link: /?dish=123 (used by cook profile pages) opens that
           // meal's info screen directly instead of landing on the feed.
@@ -1620,6 +1600,45 @@ export default function Home() {
     loadDishesPage(0, true, { lat: user.latitude, lng: user.longitude });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.latitude, user?.longitude, nearbyRadiusMi]);
+
+  // Refresh the user's live location (blue dot, distances, nearby radius).
+  // Throttled: skipped when the last fix is under 2 minutes old, so tab
+  // switches don't spam the GPS. Runs on app open and whenever the app
+  // returns to the foreground — moving around with the app backgrounded is
+  // picked up the moment it's looked at again. No continuous tracking.
+  const lastLocationFixAt = useRef(0);
+  const refreshLiveLocation = () => {
+    if (!navigator.geolocation) return;
+    if (Date.now() - lastLocationFixAt.current < 120000) return;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        lastLocationFixAt.current = Date.now();
+        const { latitude, longitude } = pos.coords;
+        // Apply locally right away so the UI is correct without waiting on
+        // the server round-trip.
+        setUser(prev => (prev ? { ...prev, latitude, longitude } : prev));
+        try {
+          await fetch('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
+          });
+        } catch (e) { console.error(e); }
+      },
+      () => { /* denied or unavailable — keep last known */ },
+      { timeout: 8000, maximumAge: 60000 }
+    );
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshLiveLocation();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   // End in-app navigation whenever the user leaves the order-detail screen
   useEffect(() => {
