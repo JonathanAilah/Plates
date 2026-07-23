@@ -75,12 +75,24 @@ export async function POST(request: NextRequest) {
       if (me.account_disabled) {
         return NextResponse.json({ error: 'Account is disabled' }, { status: 403 });
       }
-      // Optional extras: comma-separated side options and a daily selling
-      // window (HH:MM). Validate shape server-side; the client also checks
-      // the window against the cook's stated cooking hours.
-      const sides = typeof body.sides === 'string' && body.sides.trim()
-        ? body.sides.split(',').map((s: string) => s.trim()).filter(Boolean).slice(0, 12).join(', ').slice(0, 500)
-        : null;
+      // Optional extras: side options ([{ name, price }] — the price is
+      // added to the meal total when the buyer picks that side) and a daily
+      // selling window (HH:MM). Validate shape server-side; the client also
+      // checks the window against the cook's stated cooking hours.
+      let sides: string | null = null;
+      if (Array.isArray(body.sides)) {
+        const cleaned = body.sides
+          .map((s: any) => ({
+            name: String(s?.name ?? '').trim().slice(0, 80),
+            price: Math.min(1000, Math.max(0, Math.round((Number(s?.price) || 0) * 100) / 100)),
+          }))
+          .filter((s: { name: string }) => s.name)
+          .slice(0, 12);
+        sides = cleaned.length ? JSON.stringify(cleaned) : null;
+      } else if (typeof body.sides === 'string' && body.sides.trim()) {
+        // Legacy comma-separated names (no prices)
+        sides = body.sides.split(',').map((s: string) => s.trim()).filter(Boolean).slice(0, 12).join(', ').slice(0, 500) || null;
+      }
       const timeRe = /^([01]?\d|2[0-3]):[0-5]\d$/;
       const sellStart = typeof body.sellStart === 'string' && timeRe.test(body.sellStart) ? body.sellStart : null;
       const sellEnd = typeof body.sellEnd === 'string' && timeRe.test(body.sellEnd) ? body.sellEnd : null;
