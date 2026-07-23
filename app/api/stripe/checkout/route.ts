@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { stripe } from '@/lib/stripe';
 import { getCartGroupedBySeller, getUser, getPlatformSettings } from '@/lib/db';
 import { requireSessionUser } from '@/lib/auth';
+import { sidePriceFor } from '@/lib/sides';
+
+// Per-plate price in cents, including the chosen side's price
+const unitCents = (i: any) =>
+  Math.round(Number(i.price) * 100) + Math.round(sidePriceFor(i.sides, i.side_choice) * 100);
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,7 +25,7 @@ export async function POST(req: NextRequest) {
     const settings = await getPlatformSettings();
     const cartSubtotalCents = Array.from(grouped.values()).reduce(
       (sum: number, items: any[]) =>
-        sum + items.reduce((s: number, i: any) => s + Math.round(Number(i.price) * 100) * i.quantity, 0),
+        sum + items.reduce((s: number, i: any) => s + unitCents(i) * i.quantity, 0),
       0,
     );
     const feeCents = Math.max(
@@ -42,7 +47,7 @@ export async function POST(req: NextRequest) {
       }
 
       const subtotalCents = items.reduce(
-        (sum: number, i: any) => sum + Math.round(Number(i.price) * 100) * i.quantity,
+        (sum: number, i: any) => sum + unitCents(i) * i.quantity,
         0,
       );
       // Tip + service fee + tax ride on the first cook's charge (single-cook

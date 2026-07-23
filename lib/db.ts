@@ -1,5 +1,6 @@
 import { sql } from '@vercel/postgres';
 import { PLATES_FEE_PERCENT } from './fees';
+import { sidePriceFor } from './sides';
 
 // Memoized so the schema migration runs at most once per server instance
 // rather than on every request. On failure the cached promise is cleared so
@@ -1251,7 +1252,9 @@ export async function checkoutCart(
   const primaryIntentId = paymentIntentIds[0] || null;
   let first = true;
   for (const item of items) {
-    const linePrice = Number(item.price) * item.quantity;
+    // A chosen side adds its price to every plate in the line
+    const unitPrice = Number(item.price) + sidePriceFor(item.sides, item.side_choice);
+    const linePrice = Math.round(unitPrice * item.quantity * 100) / 100;
     total += linePrice;
     const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
     // Record the platform/cook split at order time. Under the escrow model
@@ -1617,7 +1620,8 @@ export async function getAdminStats() {
   const admins = await sql`SELECT COUNT(*)::int as c FROM users WHERE role != 'user'`;
   const totalUsers = await sql`SELECT COUNT(*)::int as c FROM users`;
   const totalDishes = await sql`SELECT COUNT(*)::int as c FROM dishes`;
-  const totalOrders = await sql`SELECT COUNT(*)::int as c FROM orders`;
+  // Excludes cancelled so it matches the Financials "Orders" card
+  const totalOrders = await sql`SELECT COUNT(*)::int as c FROM orders WHERE status != 'cancelled'`;
   const orphanDishes = await sql`SELECT COUNT(*)::int as c FROM dishes WHERE photo_url IS NULL`;
 
   const openBugs = await sql`SELECT COUNT(*)::int as c FROM bug_reports WHERE status = 'open'`;

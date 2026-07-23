@@ -5,6 +5,7 @@ import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, 
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
+import { parseSides, sidePriceFor } from '@/lib/sides';
 import MarketingIntro from '@/components/MarketingIntro';
 import WelcomeChooser from '@/components/WelcomeChooser';
 
@@ -605,9 +606,10 @@ export default function Home() {
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
   // Catering: cooks flag new dishes as catering items; buyers schedule a
   // pickup date (+ time) at checkout instead of the pickup-in-minutes slider.
-  const [newDishIsCatering, setNewDishIsCatering] = useState(false);
   const [newDishDescription, setNewDishDescription] = useState('');
-  const [newDishSides, setNewDishSides] = useState('');
+  // Each side is its own line item with a price that's added to the meal
+  // total when the buyer picks it. Prices stay as strings while typing.
+  const [newDishSides, setNewDishSides] = useState<{ name: string; price: string }[]>([]);
   const [newDishSellStart, setNewDishSellStart] = useState('');
   const [newDishSellEnd, setNewDishSellEnd] = useState('');
   const [mealSide, setMealSide] = useState<string | null>(null);
@@ -677,6 +679,9 @@ export default function Home() {
   const [adminSelectedUser, setAdminSelectedUser] = useState<AdminUserDetail | null>(null);
   const [adminDeleteConfirmingFor, setAdminDeleteConfirmingFor] = useState<number | null>(null);
   const [adminDeleteChecked, setAdminDeleteChecked] = useState(false);
+  // Role changes take effect instantly, so require an explicit confirm step
+  // before granting/removing staff access.
+  const [adminRoleConfirm, setAdminRoleConfirm] = useState<{ userId: number; role: 'user' | 'admin' | 'secondary_admin' | 'support' } | null>(null);
   const [adminSelectedUserOrders, setAdminSelectedUserOrders] = useState<any[]>([]);
   const [adminDishes, setAdminDishes] = useState<AdminDishRow[]>([]);
   const [adminDishSearch, setAdminDishSearch] = useState('');
@@ -980,6 +985,7 @@ export default function Home() {
   };
 
   const loadAdminUserDetail = async (userId: number) => {
+    setAdminRoleConfirm(prev => (prev && prev.userId !== userId ? null : prev));
     try {
       const [detailRes, ordersRes] = await Promise.all([
         fetch(`/api/admin?action=userDetail&userId=${userId}`),
@@ -1177,6 +1183,7 @@ export default function Home() {
     const result = await adminAction({ action: 'setRole', userId, role });
     if (result) {
       showToast(role === 'user' ? 'Staff role removed' : `Role set: ${ROLE_NAME[role]}`);
+      setAdminRoleConfirm(null);
       if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
     }
   };
@@ -1998,8 +2005,8 @@ export default function Home() {
     setTripInfo(null);
     setMealReviews([]);
     // Default to the first side option; the buyer can tap to change it
-    const sideList = (dish.sides || '').split(',').map(s => s.trim()).filter(Boolean);
-    setMealSide(sideList[0] || null);
+    const sideList = parseSides(dish.sides);
+    setMealSide(sideList[0]?.name || null);
     loadReviewsForDish(dish.id);
     setScreen('meal');
   };
@@ -2062,7 +2069,7 @@ export default function Home() {
     } catch (error) { console.error(error); }
   };
 
-  const subtotal = cart.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
+  const subtotal = cart.reduce((sum, item) => sum + (Number(item.price) + sidePriceFor(item.sides, item.side_choice)) * item.quantity, 0);
   const serviceFee = cart.length > 0 ? Math.max(feeSettings.serviceFeeMin, subtotal * feeSettings.serviceFeePercent / 100) : 0;
   const taxAmount = cart.length > 0 ? subtotal * feeSettings.taxPercent / 100 : 0;
   const cartTotal = subtotal + serviceFee + taxAmount + (cart.length > 0 ? tipAmount : 0);
@@ -2268,7 +2275,9 @@ export default function Home() {
           emoji,
           photoUrl,
           isCatering,
-          sides: newDishSides.trim() || null,
+          sides: newDishSides
+            .map(s => ({ name: s.name.trim(), price: Math.max(0, parseFloat(s.price) || 0) }))
+            .filter(s => s.name),
           sellStart: sellStart || null,
           sellEnd: sellEnd || null,
         }),
@@ -2289,9 +2298,8 @@ export default function Home() {
       if (!isCatering) setDishes([fullDish, ...dishes]);
       setDishPhotoFile(null);
       setDishPhotoPreview(null);
-      setNewDishIsCatering(false);
       setNewDishDescription('');
-      setNewDishSides('');
+      setNewDishSides([]);
       setNewDishSellStart('');
       setNewDishSellEnd('');
       if (dishFileInputRef.current) dishFileInputRef.current.value = '';
@@ -3787,18 +3795,19 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Side options — the chosen side rides the order so the cook sees it */}
-              {(selectedDish.sides || '').trim() && (
+              {/* Side options — the chosen side rides the order so the cook sees
+                  it, and its price is added to the meal total */}
+              {parseSides(selectedDish.sides).length > 0 && (
                 <div style={{ marginTop: 16 }}>
                   <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>Choose a side</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {(selectedDish.sides || '').split(',').map(s => s.trim()).filter(Boolean).map(side => (
+                    {parseSides(selectedDish.sides).map(side => (
                       <button
-                        key={side}
-                        onClick={() => setMealSide(side)}
-                        style={{ padding: '8px 14px', borderRadius: 18, background: mealSide === side ? C.ink : C.cardAlt, color: mealSide === side ? '#fff' : C.inkSoft, font: `500 12.5px ${font.sans}` }}
+                        key={side.name}
+                        onClick={() => setMealSide(side.name)}
+                        style={{ padding: '8px 14px', borderRadius: 18, background: mealSide === side.name ? C.ink : C.cardAlt, color: mealSide === side.name ? '#fff' : C.inkSoft, font: `500 12.5px ${font.sans}` }}
                       >
-                        {side}
+                        {side.name}{side.price > 0 ? ` +$${side.price.toFixed(2)}` : ''}
                       </button>
                     ))}
                   </div>
@@ -3955,7 +3964,7 @@ export default function Home() {
                     style={{ flex: 1, background: inWindow ? C.terracotta : C.cardAlt, color: inWindow ? '#fff' : C.muted, borderRadius: 13, padding: 14, font: `500 14px ${font.sans}` }}
                   >
                     {inWindow
-                      ? `Add to cart · $${(Number(selectedDish.price) * mealQty).toFixed(0)}`
+                      ? `Add to cart · $${((Number(selectedDish.price) + sidePriceFor(selectedDish.sides, mealSide)) * mealQty).toFixed(2)}`
                       : `Selling ${formatHHMM(selectedDish.sell_start!)}–${formatHHMM(selectedDish.sell_end!)}`}
                   </button>
                 );
@@ -4022,10 +4031,10 @@ export default function Home() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
                           <div style={{ font: `500 14px/1.15 ${font.serif}`, color: C.ink }}>{item.name}</div>
-                          <div style={{ font: `500 14px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${(Number(item.price) * item.quantity).toFixed(2)}</div>
+                          <div style={{ font: `500 14px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${((Number(item.price) + sidePriceFor(item.sides, item.side_choice)) * item.quantity).toFixed(2)}</div>
                         </div>
                         <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>
-                          from {item.seller_name}{item.side_choice ? <> · side: <span style={{ color: C.inkSoft }}>{item.side_choice}</span></> : null}
+                          from {item.seller_name}{item.side_choice ? <> · side: <span style={{ color: C.inkSoft }}>{item.side_choice}{sidePriceFor(item.sides, item.side_choice) > 0 ? ` (+$${sidePriceFor(item.sides, item.side_choice).toFixed(2)})` : ''}</span></> : null}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
                           <div style={{ display: 'flex', alignItems: 'center', background: C.surface, borderRadius: 9, padding: 2 }}>
@@ -4722,17 +4731,51 @@ export default function Home() {
                 />
 
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Side options (optional)</div>
-                <input
-                  type="text"
-                  value={newDishSides}
-                  onChange={(e) => setNewDishSides(e.target.value)}
-                  placeholder="e.g., Rice, Beans, Plantains — separate with commas"
-                  style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }}
-                />
+                {newDishSides.map((s, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                    <input
+                      type="text"
+                      value={s.name}
+                      onChange={(e) => setNewDishSides(prev => prev.map((row, j) => j === i ? { ...row, name: e.target.value } : row))}
+                      placeholder={`Side ${i + 1}, e.g. Rice`}
+                      style={{ flex: 1, minWidth: 0, padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }}
+                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none' }}>
+                      <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.25"
+                        value={s.price}
+                        onChange={(e) => setNewDishSides(prev => prev.map((row, j) => j === i ? { ...row, price: e.target.value } : row))}
+                        placeholder="0"
+                        style={{ width: 68, padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }}
+                      />
+                    </div>
+                    <button
+                      onClick={() => setNewDishSides(prev => prev.filter((_, j) => j !== i))}
+                      style={{ flex: 'none', width: 34, color: C.mutedLight, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      aria-label="Remove side"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                ))}
+                {newDishSides.length < 12 && (
+                  <button
+                    onClick={() => setNewDishSides(prev => [...prev, { name: '', price: '' }])}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: C.cardAlt, color: C.inkSoft, borderRadius: 10, font: `500 12.5px ${font.sans}`, marginBottom: 4 }}
+                  >
+                    <Plus size={14} /> Add a side
+                  </button>
+                )}
+                {newDishSides.length > 0 && (
+                  <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 8 }}>
+                    A side&apos;s price is added to the meal total when the buyer picks it. Leave the price at 0 for a free side.
+                  </div>
+                )}
 
-                {!newDishIsCatering && (
-                  <>
-                    <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Selling window today (optional)</div>
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Selling window today (optional — daily menu only)</div>
                     <div style={{ display: 'flex', gap: 10, marginBottom: 4 }}>
                       <div style={{ flex: 1 }}>
                         <input type="time" value={newDishSellStart} onChange={(e) => setNewDishSellStart(e.target.value)} style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
@@ -4747,8 +4790,6 @@ export default function Home() {
                         ? `Must fall within your cooking hours: ${formatCookingHours(user.cooking_hours)}`
                         : 'Buyers can only order during this window. Leave blank to sell all day.'}
                     </div>
-                  </>
-                )}
 
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Photo (optional)</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -4763,33 +4804,31 @@ export default function Home() {
                   <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>{dishPhotoFile ? dishPhotoFile.name : 'Tap to add a photo'}</span>
                 </div>
 
-                <label
-                  onClick={() => setNewDishIsCatering(!newDishIsCatering)}
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, background: newDishIsCatering ? C.greenLight : C.cardAlt, borderRadius: 10, marginBottom: 12, border: `2px solid ${newDishIsCatering ? C.green : 'transparent'}` }}
-                >
-                  <div style={{ width: 20, height: 20, borderRadius: 6, background: newDishIsCatering ? C.green : '#fff', border: `2px solid ${newDishIsCatering ? C.green : C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', color: '#fff', font: `700 12px ${font.sans}`, marginTop: 1 }}>
-                    {newDishIsCatering ? '✓' : ''}
-                  </div>
-                  <div>
-                    <div style={{ font: `500 13.5px ${font.sans}`, color: newDishIsCatering ? C.green : C.ink }}>Catering item</div>
-                    <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginTop: 2 }}>
-                      Shows on your catering page instead of the daily feed. Buyers schedule a pickup date when ordering.
-                    </div>
-                  </div>
-                </label>
-
-                <button onClick={() => {
-                  const nameInput = document.getElementById('dishName') as HTMLInputElement;
-                  const priceInput = document.getElementById('dishPrice') as HTMLInputElement;
-                  const priceValue = parseFloat(priceInput.value);
-                  if (nameInput.value.trim() && priceValue > 0) {
-                    addDish(nameInput.value.trim(), priceValue, newDishIsCatering);
-                    nameInput.value = '';
-                    priceInput.value = '';
-                  }
-                }} style={{ width: '100%', padding: 12, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                  <Plus size={16} /> {newDishIsCatering ? 'Add to catering menu' : 'Add to menu'}
-                </button>
+                {(() => {
+                  const submitDish = (isCatering: boolean) => {
+                    const nameInput = document.getElementById('dishName') as HTMLInputElement;
+                    const priceInput = document.getElementById('dishPrice') as HTMLInputElement;
+                    const priceValue = parseFloat(priceInput.value);
+                    if (nameInput.value.trim() && priceValue > 0) {
+                      addDish(nameInput.value.trim(), priceValue, isCatering);
+                      nameInput.value = '';
+                      priceInput.value = '';
+                    }
+                  };
+                  return (
+                    <>
+                      <button onClick={() => submitDish(false)} style={{ width: '100%', padding: 12, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        <Plus size={16} /> Add to Menu
+                      </button>
+                      <button onClick={() => submitDish(true)} style={{ width: '100%', marginTop: 8, padding: 12, background: 'transparent', border: `1.5px solid ${C.green}`, color: C.green, borderRadius: 10, font: `500 14px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                        <Plus size={16} /> Add to Catering
+                      </button>
+                      <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginTop: 6 }}>
+                        Catering items show on your catering page instead of the daily feed — buyers schedule a pickup date at checkout.
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ) : user.seller_status === 'not_seller' && user.legal_name && user.kitchen_name && user.cottage_food_attested && user.has_permit != null && user.kitchen_environment && user.cooking_hours && user.pickup_description && user.prep_address ? (
               <div style={{ background: C.greenLight, borderRadius: 14, padding: 16, marginBottom: 16, textAlign: 'center' }}>
@@ -6177,15 +6216,49 @@ export default function Home() {
                         ] as const).filter(r => user.role === 'admin' || r.key === 'user' || r.key === 'support').map(r => (
                           <button
                             key={r.key}
-                            onClick={() => u.role !== r.key && adminSetRole(u.id, r.key)}
+                            onClick={() => u.role !== r.key && setAdminRoleConfirm({ userId: u.id, role: r.key })}
                             disabled={adminActionSubmitting || u.role === r.key}
-                            style={{ padding: '8px 6px', background: u.role === r.key ? C.ink : '#fff', color: u.role === r.key ? '#fff' : C.ink, border: `1px solid ${u.role === r.key ? C.ink : C.divider}`, borderRadius: 8, textAlign: 'left' }}
+                            style={{ padding: '8px 6px', background: u.role === r.key ? C.ink : adminRoleConfirm?.userId === u.id && adminRoleConfirm?.role === r.key ? '#fff9e6' : '#fff', color: u.role === r.key ? '#fff' : C.ink, border: `1px solid ${u.role === r.key ? C.ink : adminRoleConfirm?.userId === u.id && adminRoleConfirm?.role === r.key ? '#f0d67a' : C.divider}`, borderRadius: 8, textAlign: 'left' }}
                           >
                             <div style={{ font: `500 12px ${font.sans}` }}>{r.label}</div>
                             <div style={{ font: `400 10px ${font.sans}`, opacity: .7, marginTop: 1 }}>{r.hint}</div>
                           </button>
                         ))}
                       </div>
+
+                      {/* Accidental-appointment guard: nothing changes until
+                          the choice is confirmed here. */}
+                      {adminRoleConfirm && adminRoleConfirm.userId === u.id && (
+                        <div style={{ marginTop: 8, padding: 12, background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 10 }}>
+                          <div style={{ font: `500 13px ${font.sans}`, color: '#7a5c0b', marginBottom: 4 }}>
+                            {adminRoleConfirm.role === 'user'
+                              ? `Remove ${u.name}'s staff role?`
+                              : `Make ${u.name} ${adminRoleConfirm.role === 'admin' ? 'a Chief admin' : adminRoleConfirm.role === 'secondary_admin' ? 'an Admin' : 'Support staff'}?`}
+                          </div>
+                          <div style={{ font: `400 12px ${font.sans}`, color: C.ink, marginBottom: 10, lineHeight: 1.4 }}>
+                            {adminRoleConfirm.role === 'user' && 'They immediately lose all staff access.'}
+                            {adminRoleConfirm.role === 'support' && 'They can immediately view and resolve bug reports, and can enable bug alert notifications.'}
+                            {adminRoleConfirm.role === 'secondary_admin' && 'They immediately get the full admin panel except financials, and can manage support staff.'}
+                            {adminRoleConfirm.role === 'admin' && 'They immediately get FULL access: financials, pricing, every role, and permanent user deletion.'}
+                          </div>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              onClick={() => setAdminRoleConfirm(null)}
+                              disabled={adminActionSubmitting}
+                              style={{ flex: 1, padding: 8, background: C.cardAlt, color: C.ink, borderRadius: 8, font: `500 12px ${font.sans}` }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => adminRoleConfirm && adminSetRole(u.id, adminRoleConfirm.role)}
+                              disabled={adminActionSubmitting}
+                              style={{ flex: 2, padding: 8, background: C.ink, color: '#fff', borderRadius: 8, font: `500 12px ${font.sans}`, opacity: adminActionSubmitting ? 0.5 : 1 }}
+                            >
+                              {adminActionSubmitting ? 'Saving…' : 'Yes, change role'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                  {user.role === 'admin' && (adminDeleteConfirmingFor !== u.id ? (
