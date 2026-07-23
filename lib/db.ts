@@ -172,6 +172,10 @@ async function runMigrations(): Promise<void> {
       )
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_withdrawals_cook ON cook_withdrawals(cook_id, created_at DESC)`;
+    // Instant withdrawals: method ('standard' | 'instant' | 'instant_fallback')
+    // and the convenience fee Plates kept for the instant option.
+    await sql`ALTER TABLE cook_withdrawals ADD COLUMN IF NOT EXISTS method TEXT DEFAULT 'standard'`;
+    await sql`ALTER TABLE cook_withdrawals ADD COLUMN IF NOT EXISTS fee DECIMAL(10, 2) DEFAULT 0`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dish_likes (
@@ -1170,10 +1174,16 @@ export async function reserveWithdrawal(cookId: number, amount: number) {
   return result.rows[0] || null;
 }
 
-export async function settleWithdrawal(id: number, status: 'paid' | 'failed', stripeTransferId: string | null) {
+export async function settleWithdrawal(
+  id: number,
+  status: 'paid' | 'failed',
+  stripeTransferId: string | null,
+  method: 'standard' | 'instant' | 'instant_fallback' = 'standard',
+  fee: number = 0,
+) {
   const result = await sql`
     UPDATE cook_withdrawals
-    SET status = ${status}, stripe_transfer_id = ${stripeTransferId}
+    SET status = ${status}, stripe_transfer_id = ${stripeTransferId}, method = ${method}, fee = ${fee}
     WHERE id = ${id}
     RETURNING *
   `;
