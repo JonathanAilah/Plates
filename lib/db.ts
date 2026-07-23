@@ -122,6 +122,18 @@ async function runMigrations(): Promise<void> {
     //   so they must never count toward a withdrawable balance.
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tip_amount DECIMAL(10, 2)`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS escrowed BOOLEAN DEFAULT false`;
+    // Snapshot the seller directly on the order. Attribution used to go
+    // through dishes (orders -> dishes -> seller), so deleting a dish
+    // orphaned its orders: they vanished from order lists, kitchen queues,
+    // and cook earnings while still counting in unjoined totals. seller_id
+    // on the order makes the money trail survive dish deletion.
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS seller_id INTEGER`;
+    await sql`
+      UPDATE orders SET seller_id = d.seller_id
+      FROM dishes d
+      WHERE orders.dish_id = d.id AND orders.seller_id IS NULL
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id)`;
     await sql`
       CREATE TABLE IF NOT EXISTS cook_withdrawals (
         id SERIAL PRIMARY KEY,
@@ -642,8 +654,10 @@ export async function getOrders(buyerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
            o.created_at, o.updated_at, o.pickup_at, o.side_choice,
-           d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url, d.price as dish_price,
-           u.id as seller_id, u.name as seller_name, u.avatar as seller_avatar,
+           COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
+           d.photo_url as dish_photo_url, d.price as dish_price,
+           u.id as seller_id, COALESCE(u.name, 'Former cook') as seller_name,
+           COALESCE(u.avatar, '?') as seller_avatar,
            u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
            u.prep_address as seller_address,
@@ -651,8 +665,8 @@ export async function getOrders(buyerId: number) {
            u.cooking_hours as seller_cooking_hours,
            u.pickup_description as seller_pickup_description
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    JOIN users u ON d.seller_id = u.id
+    LEFT JOIN dishes d ON o.dish_id = d.id
+    LEFT JOIN users u ON u.id = o.seller_id
     WHERE o.buyer_id = ${buyerId}
     ORDER BY o.created_at DESC
   `;
@@ -729,9 +743,8 @@ export async function deletePushSubscription(endpoint: string) {
 // Cook-initiated cancel: allowed at any active stage.
 export async function cookCancelOrder(orderId: string, cookId: number) {
   const check = await sql`
-    SELECT o.id, o.status, o.stripe_payment_intent_id, d.seller_id
+    SELECT o.id, o.status, o.stripe_payment_intent_id, o.seller_id
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
     WHERE o.id = ${orderId}
     LIMIT 1
   `;
@@ -819,8 +832,7 @@ export async function deleteUserCompletely(userId: number): Promise<{
   const openSellerOrders = await sql`
     SELECT o.id, o.stripe_payment_intent_id
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${userId}
+    WHERE o.seller_id = ${userId}
       AND o.status NOT IN ('cancelled', 'picked_up')
   `;
   for (const row of openSellerOrders.rows) {
@@ -920,12 +932,14 @@ export async function getSellerOrders(sellerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
            o.created_at, o.updated_at, o.pickup_at, o.side_choice,
-           d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url,
-           u.name as buyer_name, u.avatar as buyer_avatar, u.photo_url as buyer_photo_url
+           COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
+           d.photo_url as dish_photo_url,
+           COALESCE(u.name, 'Former user') as buyer_name, COALESCE(u.avatar, '?') as buyer_avatar,
+           u.photo_url as buyer_photo_url
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    JOIN users u ON o.buyer_id = u.id
-    WHERE d.seller_id = ${sellerId}
+    LEFT JOIN dishes d ON o.dish_id = d.id
+    LEFT JOIN users u ON o.buyer_id = u.id
+    WHERE o.seller_id = ${sellerId}
     ORDER BY o.created_at DESC
   `;
   return result.rows;
@@ -957,8 +971,7 @@ export async function getCookEarnings(sellerId: number) {
       COALESCE(SUM(o.platform_fee), 0) as total_fees,
       COUNT(*)::int as order_count
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${sellerId}
+    WHERE o.seller_id = ${sellerId}
       AND o.status != 'cancelled'
   `;
   const thisWeek = await sql`
@@ -967,8 +980,7 @@ export async function getCookEarnings(sellerId: number) {
       COALESCE(SUM(o.total_price), 0) as total_sales,
       COUNT(*)::int as order_count
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${sellerId}
+    WHERE o.seller_id = ${sellerId}
       AND o.status != 'cancelled'
       AND o.created_at >= DATE_TRUNC('week', CURRENT_DATE)
   `;
@@ -978,17 +990,16 @@ export async function getCookEarnings(sellerId: number) {
       COALESCE(SUM(o.total_price), 0) as total_sales,
       COUNT(*)::int as order_count
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${sellerId}
+    WHERE o.seller_id = ${sellerId}
       AND o.status != 'cancelled'
       AND o.created_at >= DATE_TRUNC('month', CURRENT_DATE)
   `;
   const recent = await sql`
     SELECT o.id, o.total_price, o.cook_earnings, o.platform_fee, o.status, o.created_at,
-           d.name as dish_name, d.emoji as dish_emoji
+           COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${sellerId}
+    LEFT JOIN dishes d ON o.dish_id = d.id
+    WHERE o.seller_id = ${sellerId}
       AND o.status != 'cancelled'
     ORDER BY o.created_at DESC
     LIMIT 20
@@ -1013,8 +1024,7 @@ export async function getCookBalance(cookId: number) {
       COALESCE(SUM(CASE WHEN o.status = 'picked_up' THEN o.cook_earnings + COALESCE(o.tip_amount, 0) END), 0) AS released,
       COALESCE(SUM(CASE WHEN o.status NOT IN ('picked_up', 'cancelled') THEN o.cook_earnings + COALESCE(o.tip_amount, 0) END), 0) AS pending
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${cookId} AND o.escrowed = true
+    WHERE o.seller_id = ${cookId} AND o.escrowed = true
   `;
   const withdrawn = await sql`
     SELECT COALESCE(SUM(amount), 0) AS total
@@ -1052,8 +1062,8 @@ export async function reserveWithdrawal(cookId: number, amount: number) {
     WHERE ${amount} > 0 AND ${amount} <= (
       COALESCE((
         SELECT SUM(o.cook_earnings + COALESCE(o.tip_amount, 0))
-        FROM orders o JOIN dishes d ON o.dish_id = d.id
-        WHERE d.seller_id = ${cookId} AND o.escrowed = true AND o.status = 'picked_up'
+        FROM orders o
+        WHERE o.seller_id = ${cookId} AND o.escrowed = true AND o.status = 'picked_up'
       ), 0)
       -
       COALESCE((
@@ -1136,8 +1146,8 @@ export async function checkoutCart(
     // there so the cook's balance credits it exactly once.
     const tipForRow = first ? Math.round((Number(tipAmount) || 0) * 100) / 100 : 0;
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings, tip_amount, escrowed)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings}, ${tipForRow}, true)
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings, tip_amount, escrowed, seller_id)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings}, ${tipForRow}, true, ${item.seller_id})
       RETURNING *
     `;
     orders.push(order.rows[0]);
@@ -1152,10 +1162,9 @@ export async function checkoutCart(
 // Verify a user is a party to an order (buyer or seller). Returns the order row or null.
 export async function getOrderIfParticipant(orderId: string, userId: number) {
   const result = await sql`
-    SELECT o.*, d.seller_id
+    SELECT o.*
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE o.id = ${orderId} AND (o.buyer_id = ${userId} OR d.seller_id = ${userId})
+    WHERE o.id = ${orderId} AND (o.buyer_id = ${userId} OR o.seller_id = ${userId})
     LIMIT 1
   `;
   return result.rows[0] || null;
@@ -1198,9 +1207,8 @@ export async function getUnreadCounts(userId: number) {
   const result = await sql`
     SELECT o.id as order_id, COUNT(m.id)::int as unread
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
     LEFT JOIN messages m ON m.order_id = o.id AND m.sender_id != ${userId} AND m.read_at IS NULL
-    WHERE (o.buyer_id = ${userId} OR d.seller_id = ${userId})
+    WHERE (o.buyer_id = ${userId} OR o.seller_id = ${userId})
       AND o.status NOT IN ('picked_up', 'cancelled')
     GROUP BY o.id
     HAVING COUNT(m.id) > 0
@@ -1279,8 +1287,7 @@ export async function getOrdersVersion(userId: number): Promise<string> {
   const result = await sql`
     SELECT COUNT(*)::int AS count, COALESCE(MAX(o.updated_at)::text, '') AS latest
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE o.buyer_id = ${userId} OR d.seller_id = ${userId}
+    WHERE o.buyer_id = ${userId} OR o.seller_id = ${userId}
   `;
   const row = result.rows[0];
   return `${row.count}:${row.latest}`;
@@ -1439,7 +1446,7 @@ export async function getUserDetailForAdmin(userId: number) {
   // Count dishes, orders as buyer, orders as seller
   const dishCount = await sql`SELECT COUNT(*)::int as c FROM dishes WHERE seller_id = ${userId}`;
   const orderAsBuyer = await sql`SELECT COUNT(*)::int as c FROM orders WHERE buyer_id = ${userId}`;
-  const orderAsSeller = await sql`SELECT COUNT(*)::int as c FROM orders o JOIN dishes d ON o.dish_id = d.id WHERE d.seller_id = ${userId}`;
+  const orderAsSeller = await sql`SELECT COUNT(*)::int as c FROM orders o WHERE o.seller_id = ${userId}`;
 
   return {
     user,
@@ -1500,13 +1507,13 @@ export async function getAdminStats() {
 export async function getAdminUserOrders(userId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
-           o.created_at, d.name as dish_name, d.emoji as dish_emoji,
-           b.name as buyer_name, s.name as seller_name, s.id as seller_id
+           o.created_at, COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
+           COALESCE(b.name, 'Former user') as buyer_name, COALESCE(s.name, 'Former cook') as seller_name, o.seller_id
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    JOIN users b ON o.buyer_id = b.id
-    JOIN users s ON d.seller_id = s.id
-    WHERE o.buyer_id = ${userId} OR d.seller_id = ${userId}
+    LEFT JOIN dishes d ON o.dish_id = d.id
+    LEFT JOIN users b ON o.buyer_id = b.id
+    LEFT JOIN users s ON s.id = o.seller_id
+    WHERE o.buyer_id = ${userId} OR o.seller_id = ${userId}
     ORDER BY o.created_at DESC LIMIT 100
   `;
   return result.rows;
@@ -1531,8 +1538,7 @@ export async function getAdminFinancials() {
            COALESCE(SUM(o.total_price), 0) as gross_sales,
            COALESCE(SUM(o.platform_fee), 0) as platform_revenue
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    JOIN users u ON d.seller_id = u.id
+    JOIN users u ON u.id = o.seller_id
     WHERE o.status != 'cancelled'
     GROUP BY u.id, u.name, u.kitchen_name
     ORDER BY gross_sales DESC
@@ -1595,16 +1601,19 @@ export async function getAllOrdersForAdmin(opts: AdminOrdersListOptions = {}) {
   params.push(offset);
   const offsetParam = `$${params.length}`;
 
+  // LEFT JOINs + COALESCE labels: orders must stay visible even when their
+  // dish or a participating user has since been deleted — the totals count
+  // them, so the drill-down must show them too.
   const result = await sql.query(
     `SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
             o.created_at, o.pickup_at, o.side_choice,
-            d.name as dish_name, d.emoji as dish_emoji,
-            b.id as buyer_id, b.name as buyer_name,
-            s.id as seller_id, s.name as seller_name, s.kitchen_name as seller_kitchen_name
+            COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
+            b.id as buyer_id, COALESCE(b.name, 'Former user') as buyer_name,
+            o.seller_id, COALESCE(s.name, 'Former cook') as seller_name, s.kitchen_name as seller_kitchen_name
      FROM orders o
-     JOIN dishes d ON o.dish_id = d.id
-     JOIN users b ON o.buyer_id = b.id
-     JOIN users s ON d.seller_id = s.id
+     LEFT JOIN dishes d ON o.dish_id = d.id
+     LEFT JOIN users b ON o.buyer_id = b.id
+     LEFT JOIN users s ON s.id = o.seller_id
      ${where}
      ORDER BY o.created_at DESC
      LIMIT ${limitParam} OFFSET ${offsetParam}`,
@@ -1636,6 +1645,8 @@ export async function getAllCooksForAdminPayouts(opts: AdminCookPayoutsListOptio
   params.push(offset);
   const offsetParam = `$${params.length}`;
 
+  // Attribution goes through orders.seller_id (snapshotted at checkout), so
+  // a cook's numbers survive their dishes being deleted.
   const result = await sql.query(
     `SELECT u.id, u.name, u.kitchen_name, u.avatar, u.photo_url,
             u.stripe_charges_enabled, u.stripe_payouts_enabled,
@@ -1644,15 +1655,26 @@ export async function getAllCooksForAdminPayouts(opts: AdminCookPayoutsListOptio
             COALESCE(SUM(o.cook_earnings) FILTER (WHERE o.status != 'cancelled'), 0) as cook_earnings,
             COUNT(o.id) FILTER (WHERE o.status != 'cancelled')::int as order_count
      FROM users u
-     LEFT JOIN dishes d ON d.seller_id = u.id
-     LEFT JOIN orders o ON o.dish_id = d.id
+     LEFT JOIN orders o ON o.seller_id = u.id
      ${where}
      GROUP BY u.id, u.name, u.kitchen_name, u.avatar, u.photo_url, u.stripe_charges_enabled, u.stripe_payouts_enabled
      ORDER BY total_sales DESC
      LIMIT ${limitParam} OFFSET ${offsetParam}`,
     params,
   );
-  return result.rows;
+
+  // Orders whose seller can no longer be determined (dish deleted before
+  // seller snapshots existed). Surfaced so the list still reconciles with
+  // the Financials totals.
+  const unattributed = await sql`
+    SELECT COALESCE(SUM(cook_earnings), 0) as cook_earnings,
+           COALESCE(SUM(total_price), 0) as total_sales,
+           COUNT(*)::int as order_count
+    FROM orders
+    WHERE seller_id IS NULL AND status != 'cancelled'
+  `;
+
+  return { cooks: result.rows, unattributed: unattributed.rows[0] };
 }
 
 export async function getCookPayoutDetail(
@@ -1677,8 +1699,7 @@ export async function getCookPayoutDetail(
       COALESCE(SUM(o.cook_earnings), 0) as cook_earnings,
       COUNT(*)::int as order_count
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${cookId} AND o.status != 'cancelled'
+    WHERE o.seller_id = ${cookId} AND o.status != 'cancelled'
   `;
 
   // Active orders: money already earned per our stored split (Stripe moves
@@ -1686,12 +1707,12 @@ export async function getCookPayoutDetail(
   const upcomingResult = await sql`
     SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
            o.created_at, o.pickup_at, o.side_choice,
-           d.name as dish_name, d.emoji as dish_emoji,
-           b.name as buyer_name
+           COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
+           COALESCE(b.name, 'Former user') as buyer_name
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    JOIN users b ON o.buyer_id = b.id
-    WHERE d.seller_id = ${cookId} AND o.status NOT IN ('picked_up', 'cancelled')
+    LEFT JOIN dishes d ON o.dish_id = d.id
+    LEFT JOIN users b ON o.buyer_id = b.id
+    WHERE o.seller_id = ${cookId} AND o.status NOT IN ('picked_up', 'cancelled')
     ORDER BY o.pickup_at ASC NULLS LAST, o.created_at ASC
     LIMIT 100
   `;
@@ -1699,12 +1720,12 @@ export async function getCookPayoutDetail(
   const pastResult = await sql`
     SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
            o.created_at, o.pickup_at, o.updated_at, o.side_choice,
-           d.name as dish_name, d.emoji as dish_emoji,
-           b.name as buyer_name
+           COALESCE(d.name, 'Deleted dish') as dish_name, COALESCE(d.emoji, '🍽️') as dish_emoji,
+           COALESCE(b.name, 'Former user') as buyer_name
     FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    JOIN users b ON o.buyer_id = b.id
-    WHERE d.seller_id = ${cookId} AND o.status = 'picked_up'
+    LEFT JOIN dishes d ON o.dish_id = d.id
+    LEFT JOIN users b ON o.buyer_id = b.id
+    WHERE o.seller_id = ${cookId} AND o.status = 'picked_up'
     ORDER BY o.updated_at DESC
     LIMIT ${pastLimit} OFFSET ${pastOffset}
   `;
@@ -2033,8 +2054,7 @@ export async function getAvailableSlotsForCook(sellerUserId: number, isoDateStri
   // Count today's orders for this seller (any of their dishes)
   const orderCountResult = await sql`
     SELECT COUNT(*)::int as c FROM orders o
-    JOIN dishes d ON o.dish_id = d.id
-    WHERE d.seller_id = ${sellerUserId}
+    WHERE o.seller_id = ${sellerUserId}
       AND o.pickup_date = ${isoDateString}
       AND o.status NOT IN ('cancelled')
   `;
