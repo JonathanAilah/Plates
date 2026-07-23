@@ -95,6 +95,14 @@ async function runMigrations(): Promise<void> {
     // Catering items live on the cook's catering page only (never in the
     // homepage feed) and are picked up on a buyer-scheduled future date.
     await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS is_catering BOOLEAN DEFAULT false`;
+    // Dish extras: optional side options (comma-separated) and a daily
+    // selling window (HH:MM, 24h) within the cook's stated cooking hours.
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS sides TEXT`;
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS sell_start TEXT`;
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS sell_end TEXT`;
+    // Buyer's chosen side rides the cart item and is snapshotted on the order
+    await sql`ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS side_choice TEXT`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS side_choice TEXT`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dish_likes (
@@ -401,10 +409,21 @@ export async function isAdmin(userId: number): Promise<boolean> {
   return result.rows[0]?.role === 'admin';
 }
 
-export async function createDish(sellerId: number, name: string, description: string, price: number, emoji: string, photoUrl: string | null, isCatering: boolean = false) {
+export async function createDish(
+  sellerId: number,
+  name: string,
+  description: string,
+  price: number,
+  emoji: string,
+  photoUrl: string | null,
+  isCatering: boolean = false,
+  sides: string | null = null,
+  sellStart: string | null = null,
+  sellEnd: string | null = null,
+) {
   const result = await sql`
-    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url, is_catering)
-    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl}, ${isCatering})
+    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url, is_catering, sides, sell_start, sell_end)
+    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl}, ${isCatering}, ${sides}, ${sellStart}, ${sellEnd})
     RETURNING *
   `;
   return result.rows[0];
@@ -592,7 +611,7 @@ export async function createOrder(buyerId: number, dishId: number, quantity: num
 export async function getOrders(buyerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
-           o.created_at, o.updated_at, o.pickup_at,
+           o.created_at, o.updated_at, o.pickup_at, o.side_choice,
            d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url, d.price as dish_price,
            u.id as seller_id, u.name as seller_name, u.avatar as seller_avatar,
            u.photo_url as seller_photo_url,
@@ -870,7 +889,7 @@ export async function deleteUserCompletely(userId: number): Promise<{
 export async function getSellerOrders(sellerId: number) {
   const result = await sql`
     SELECT o.id, o.buyer_id, o.dish_id, o.quantity, o.total_price, o.status, o.pickup_code,
-           o.created_at, o.updated_at, o.pickup_at,
+           o.created_at, o.updated_at, o.pickup_at, o.side_choice,
            d.name as dish_name, d.emoji as dish_emoji, d.photo_url as dish_photo_url,
            u.name as buyer_name, u.avatar as buyer_avatar, u.photo_url as buyer_photo_url
     FROM orders o
@@ -884,7 +903,7 @@ export async function getSellerOrders(sellerId: number) {
 
 export async function getCart(buyerId: number) {
   const result = await sql`
-    SELECT c.id as cart_item_id, c.quantity, d.*,
+    SELECT c.id as cart_item_id, c.quantity, c.side_choice, d.*,
            u.id as seller_id,
            u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
@@ -951,12 +970,13 @@ export async function getCookEarnings(sellerId: number) {
     recent: recent.rows,
   };
 }
-export async function addToCart(buyerId: number, dishId: number, quantity: number) {
+export async function addToCart(buyerId: number, dishId: number, quantity: number, sideChoice: string | null = null) {
   const result = await sql`
-    INSERT INTO cart_items (buyer_id, dish_id, quantity)
-    VALUES (${buyerId}, ${dishId}, ${quantity})
+    INSERT INTO cart_items (buyer_id, dish_id, quantity, side_choice)
+    VALUES (${buyerId}, ${dishId}, ${quantity}, ${sideChoice})
     ON CONFLICT (buyer_id, dish_id)
-    DO UPDATE SET quantity = cart_items.quantity + ${quantity}
+    DO UPDATE SET quantity = cart_items.quantity + ${quantity},
+                  side_choice = COALESCE(${sideChoice}, cart_items.side_choice)
     RETURNING *
   `;
   return result.rows[0];
@@ -1001,8 +1021,8 @@ export async function checkoutCart(
     total += linePrice;
     const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null})
       RETURNING *
     `;
     orders.push(order.rows[0]);

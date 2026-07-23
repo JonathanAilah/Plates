@@ -39,6 +39,9 @@ interface Dish {
   is_featured?: boolean;
   is_hidden_from_profile?: boolean;
   is_catering?: boolean;
+  sides?: string | null;
+  sell_start?: string | null;
+  sell_end?: string | null;
 }
 
 interface Review {
@@ -115,6 +118,8 @@ interface CartItem {
   seller_pickup_min_minutes: number | null;
   seller_pickup_max_minutes: number | null;
   is_catering?: boolean;
+  side_choice?: string | null;
+  sides?: string | null;
 }
 
 type OrderStatus = 'placed' | 'accepted' | 'cooking' | 'ready' | 'picked_up' | 'cancelled';
@@ -130,6 +135,7 @@ interface BuyerOrder {
   created_at: string;
   updated_at: string;
   pickup_at: string | null;
+  side_choice: string | null;
   dish_name: string;
   dish_emoji: string;
   dish_photo_url: string | null;
@@ -157,6 +163,7 @@ interface CookOrder {
   created_at: string;
   updated_at: string;
   pickup_at: string | null;
+  side_choice: string | null;
   dish_name: string;
   dish_emoji: string;
   dish_photo_url: string | null;
@@ -277,6 +284,47 @@ function etaMinutes(miles: number): number {
 // used to fetch only nearby dishes once the viewer's location is known.
 const DISH_PAGE_SIZE = 24;
 const NEARBY_RADIUS_MI = 10;
+
+// "17:30" -> minutes since midnight
+function hhmmToMinutes(t: string): number {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// "17:30" -> "5:30 PM"
+function formatHHMM(t: string): string {
+  const [h, m] = t.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const displayH = h % 12 === 0 ? 12 : h % 12;
+  return `${displayH}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+// Best-effort parse of a free-text cooking-hours string like
+// "Weekdays 11am–7pm", "11:30am - 7pm", or "17:00-20:00" into a minutes
+// range. Returns null when no time range is recognizable — callers should
+// fall back to showing the text as guidance rather than hard-validating.
+function parseHoursRange(text: string | null | undefined): { start: number; end: number } | null {
+  if (!text) return null;
+  const re = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|—|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+  const m = text.match(re);
+  if (!m) return null;
+  const toMin = (hStr: string, mStr: string | undefined, marker: string | undefined): number => {
+    let h = parseInt(hStr, 10);
+    const mins = mStr ? parseInt(mStr, 10) : 0;
+    const mk = marker?.toLowerCase();
+    if (mk === 'pm' && h !== 12) h += 12;
+    if (mk === 'am' && h === 12) h = 0;
+    return h * 60 + mins;
+  };
+  const endMarker = m[6]?.toLowerCase();
+  // If the start has no am/pm marker, infer it: try the end's marker, and if
+  // that puts start after end, assume morning ("11–7pm" means 11am).
+  let start = toMin(m[1], m[2], m[3] || endMarker);
+  const end = toMin(m[4], m[5], m[6]);
+  if (!m[3] && start >= end) start = toMin(m[1], m[2], 'am');
+  if (start >= end) return null;
+  return { start, end };
+}
 
 async function uploadImage(file: File): Promise<string | null> {
   return new Promise((resolve) => {
@@ -475,6 +523,11 @@ export default function Home() {
   // Catering: cooks flag new dishes as catering items; buyers schedule a
   // pickup date (+ time) at checkout instead of the pickup-in-minutes slider.
   const [newDishIsCatering, setNewDishIsCatering] = useState(false);
+  const [newDishDescription, setNewDishDescription] = useState('');
+  const [newDishSides, setNewDishSides] = useState('');
+  const [newDishSellStart, setNewDishSellStart] = useState('');
+  const [newDishSellEnd, setNewDishSellEnd] = useState('');
+  const [mealSide, setMealSide] = useState<string | null>(null);
   const [cateringDate, setCateringDate] = useState('');
   const [cateringTime, setCateringTime] = useState('12:00');
   const [toast, setToast] = useState<string | null>(null);
@@ -1565,6 +1618,9 @@ export default function Home() {
     setShowingDirections(false);
     setTripInfo(null);
     setMealReviews([]);
+    // Default to the first side option; the buyer can tap to change it
+    const sideList = (dish.sides || '').split(',').map(s => s.trim()).filter(Boolean);
+    setMealSide(sideList[0] || null);
     loadReviewsForDish(dish.id);
     setScreen('meal');
   };
@@ -1592,6 +1648,7 @@ export default function Home() {
           buyerId: user.id,
           dishId: selectedDish.id,
           quantity: mealQty,
+          sideChoice: mealSide,
         }),
       });
       await loadCart(user.id);
@@ -1790,6 +1847,27 @@ export default function Home() {
   };
   const addDish = async (dishName: string, priceValue: number, isCatering: boolean) => {
     if (!user) return;
+
+    // Selling window sanity (daily dishes only — catering uses scheduled dates)
+    const sellStart = !isCatering ? newDishSellStart : '';
+    const sellEnd = !isCatering ? newDishSellEnd : '';
+    if ((sellStart && !sellEnd) || (!sellStart && sellEnd)) {
+      showToast('Set both a start and end time for your selling window');
+      return;
+    }
+    if (sellStart && sellEnd) {
+      if (sellStart >= sellEnd) {
+        showToast('Selling window must start before it ends');
+        return;
+      }
+      // Validate against the cook's stated cooking hours when parseable
+      const hours = parseHoursRange(user.cooking_hours);
+      if (hours && (hhmmToMinutes(sellStart) < hours.start || hhmmToMinutes(sellEnd) > hours.end)) {
+        showToast(`Selling window must fall within your cooking hours (${user.cooking_hours})`);
+        return;
+      }
+    }
+
     try {
       const emojis = ['🍕', '🍔', '🌮', '🍝', '🥘', '🍗', '🍜', '🍰'];
       const emoji = emojis[Math.floor(Math.random() * emojis.length)];
@@ -1806,11 +1884,14 @@ export default function Home() {
           action: 'create',
           sellerId: user.id,
           name: dishName,
-          description: isCatering ? 'Catering — order ahead' : 'Homemade with love',
+          description: newDishDescription.trim() || (isCatering ? 'Catering — order ahead' : 'Homemade with love'),
           price: priceValue,
           emoji,
           photoUrl,
           isCatering,
+          sides: newDishSides.trim() || null,
+          sellStart: sellStart || null,
+          sellEnd: sellEnd || null,
         }),
       });
 
@@ -1829,6 +1910,10 @@ export default function Home() {
       setDishPhotoFile(null);
       setDishPhotoPreview(null);
       setNewDishIsCatering(false);
+      setNewDishDescription('');
+      setNewDishSides('');
+      setNewDishSellStart('');
+      setNewDishSellEnd('');
       if (dishFileInputRef.current) dishFileInputRef.current.value = '';
       showToast(isCatering ? 'Added to your catering menu' : 'Added to your menu');
     } catch (error) { console.error(error); }
@@ -3260,11 +3345,34 @@ export default function Home() {
                 {selectedDish.is_catering && (
                   <span style={{ background: C.green, color: '#fff', padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>Catering · pick your date at checkout</span>
                 )}
+                {selectedDish.sell_start && selectedDish.sell_end && (
+                  <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>
+                    Selling {formatHHMM(selectedDish.sell_start)}–{formatHHMM(selectedDish.sell_end)}
+                  </span>
+                )}
               </div>
 
               {selectedDish.description && (
                 <div style={{ font: `400 13.5px/1.6 ${font.sans}`, color: C.inkSoft, marginTop: 18 }}>
                   {selectedDish.description}
+                </div>
+              )}
+
+              {/* Side options — the chosen side rides the order so the cook sees it */}
+              {(selectedDish.sides || '').trim() && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>Choose a side</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {(selectedDish.sides || '').split(',').map(s => s.trim()).filter(Boolean).map(side => (
+                      <button
+                        key={side}
+                        onClick={() => setMealSide(side)}
+                        style={{ padding: '8px 14px', borderRadius: 18, background: mealSide === side ? C.ink : C.cardAlt, color: mealSide === side ? '#fff' : C.inkSoft, font: `500 12.5px ${font.sans}` }}
+                      >
+                        {side}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -3405,9 +3513,24 @@ export default function Home() {
                   <Plus size={16} />
                 </button>
               </div>
-              <button onClick={addToCart} style={{ flex: 1, background: C.terracotta, color: '#fff', borderRadius: 13, padding: 14, font: `500 14px ${font.sans}` }}>
-                Add to cart · ${(Number(selectedDish.price) * mealQty).toFixed(0)}
-              </button>
+              {(() => {
+                // Outside the cook's selling window, ordering is paused
+                const now = new Date();
+                const nowMin = now.getHours() * 60 + now.getMinutes();
+                const inWindow = !selectedDish.sell_start || !selectedDish.sell_end ||
+                  (nowMin >= hhmmToMinutes(selectedDish.sell_start) && nowMin <= hhmmToMinutes(selectedDish.sell_end));
+                return (
+                  <button
+                    onClick={addToCart}
+                    disabled={!inWindow}
+                    style={{ flex: 1, background: inWindow ? C.terracotta : C.cardAlt, color: inWindow ? '#fff' : C.muted, borderRadius: 13, padding: 14, font: `500 14px ${font.sans}` }}
+                  >
+                    {inWindow
+                      ? `Add to cart · $${(Number(selectedDish.price) * mealQty).toFixed(0)}`
+                      : `Selling ${formatHHMM(selectedDish.sell_start!)}–${formatHHMM(selectedDish.sell_end!)}`}
+                  </button>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -3472,7 +3595,9 @@ export default function Home() {
                           <div style={{ font: `500 14px/1.15 ${font.serif}`, color: C.ink }}>{item.name}</div>
                           <div style={{ font: `500 14px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${(Number(item.price) * item.quantity).toFixed(2)}</div>
                         </div>
-                        <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>from {item.seller_name}</div>
+                        <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>
+                          from {item.seller_name}{item.side_choice ? <> · side: <span style={{ color: C.inkSoft }}>{item.side_choice}</span></> : null}
+                        </div>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
                           <div style={{ display: 'flex', alignItems: 'center', background: C.surface, borderRadius: 9, padding: 2 }}>
                             <button onClick={() => updateCartItemQty(item.cart_item_id, item.quantity - 1)} style={{ width: 26, height: 26, color: C.ink, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -4090,6 +4215,45 @@ export default function Home() {
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Price ($)</div>
                 <input type="number" id="dishPrice" placeholder="e.g., 12" min="0" step="0.01" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
 
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Details</div>
+                <textarea
+                  value={newDishDescription}
+                  onChange={(e) => setNewDishDescription(e.target.value)}
+                  rows={2}
+                  maxLength={500}
+                  placeholder="What's in it? How's it made? Spice level, portion size…"
+                  style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8, resize: 'none', fontFamily: font.sans }}
+                />
+
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Side options (optional)</div>
+                <input
+                  type="text"
+                  value={newDishSides}
+                  onChange={(e) => setNewDishSides(e.target.value)}
+                  placeholder="e.g., Rice, Beans, Plantains — separate with commas"
+                  style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8 }}
+                />
+
+                {!newDishIsCatering && (
+                  <>
+                    <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Selling window today (optional)</div>
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 4 }}>
+                      <div style={{ flex: 1 }}>
+                        <input type="time" value={newDishSellStart} onChange={(e) => setNewDishSellStart(e.target.value)} style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+                      </div>
+                      <span style={{ alignSelf: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>to</span>
+                      <div style={{ flex: 1 }}>
+                        <input type="time" value={newDishSellEnd} onChange={(e) => setNewDishSellEnd(e.target.value)} style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff' }} />
+                      </div>
+                    </div>
+                    <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 10 }}>
+                      {user.cooking_hours
+                        ? `Must fall within your cooking hours: ${user.cooking_hours}`
+                        : 'Buyers can only order during this window. Leave blank to sell all day.'}
+                    </div>
+                  </>
+                )}
+
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Photo (optional)</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                   <div onClick={() => dishFileInputRef.current?.click()} style={{ width: 64, height: 64, borderRadius: 10, background: C.cardAlt, border: `1px dashed ${C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden', flex: 'none' }}>
@@ -4385,7 +4549,7 @@ export default function Home() {
                         <div style={{ font: `500 14px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(o.total_price).toFixed(2)}</div>
                       </div>
                       <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 4 }}>
-                        from {o.seller_kitchen_name || o.seller_name} · {timeAgo(o.created_at)}
+                        from {o.seller_kitchen_name || o.seller_name} · {timeAgo(o.created_at)}{o.side_choice ? <> · side: {o.side_choice}</> : null}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status] + '22', color: statusColors[o.status], font: `500 11px ${font.sans}` }}>
@@ -4486,7 +4650,9 @@ export default function Home() {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ font: `500 15px/1.15 ${font.serif}`, color: C.ink }}>{o.dish_name}</div>
-                    <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 3 }}>Quantity: {o.quantity}</div>
+                    <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 3 }}>
+                      Quantity: {o.quantity}{o.side_choice ? ` · Side: ${o.side_choice}` : ''}
+                    </div>
                     <div style={{ font: `500 14px ${font.serif}`, color: C.terracotta, marginTop: 4 }}>${Number(o.total_price).toFixed(2)}</div>
                   </div>
                 </div>
@@ -4610,6 +4776,11 @@ export default function Home() {
                           <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 3 }}>
                             for {o.buyer_name} · {timeAgo(o.created_at)}
                           </div>
+                          {o.side_choice && (
+                            <div style={{ font: `500 11.5px ${font.sans}`, color: C.inkSoft, marginTop: 3 }}>
+                              Side: {o.side_choice}
+                            </div>
+                          )}
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', borderRadius: 8, background: statusColors[o.status] + '22', color: statusColors[o.status], font: `500 11px ${font.sans}` }}>
                               <span style={{ width: 6, height: 6, borderRadius: '50%', background: statusColors[o.status] }} />

@@ -26,7 +26,10 @@ export async function POST(request: NextRequest) {
     const { action } = body;
 
     if (action === 'add') {
-      const item = await addToCart(me.id, body.dishId, body.quantity || 1);
+      const sideChoice = typeof body.sideChoice === 'string' && body.sideChoice.trim()
+        ? body.sideChoice.trim().slice(0, 100)
+        : null;
+      const item = await addToCart(me.id, body.dishId, body.quantity || 1, sideChoice);
       return NextResponse.json(item);
     }
 

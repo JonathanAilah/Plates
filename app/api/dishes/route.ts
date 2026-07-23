@@ -75,7 +75,22 @@ export async function POST(request: NextRequest) {
       if (me.account_disabled) {
         return NextResponse.json({ error: 'Account is disabled' }, { status: 403 });
       }
-      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null, body.isCatering === true);
+      // Optional extras: comma-separated side options and a daily selling
+      // window (HH:MM). Validate shape server-side; the client also checks
+      // the window against the cook's stated cooking hours.
+      const sides = typeof body.sides === 'string' && body.sides.trim()
+        ? body.sides.split(',').map((s: string) => s.trim()).filter(Boolean).slice(0, 12).join(', ').slice(0, 500)
+        : null;
+      const timeRe = /^([01]?\d|2[0-3]):[0-5]\d$/;
+      const sellStart = typeof body.sellStart === 'string' && timeRe.test(body.sellStart) ? body.sellStart : null;
+      const sellEnd = typeof body.sellEnd === 'string' && timeRe.test(body.sellEnd) ? body.sellEnd : null;
+      if ((sellStart && !sellEnd) || (!sellStart && sellEnd)) {
+        return NextResponse.json({ error: 'Set both a start and end time for the selling window' }, { status: 400 });
+      }
+      if (sellStart && sellEnd && sellStart >= sellEnd) {
+        return NextResponse.json({ error: 'Selling window must start before it ends' }, { status: 400 });
+      }
+      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null, body.isCatering === true, sides, sellStart, sellEnd);
       return NextResponse.json(dish);
     }
 
