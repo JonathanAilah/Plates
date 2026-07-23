@@ -92,6 +92,9 @@ async function runMigrations(): Promise<void> {
     `;
 
     await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS photo_url TEXT`;
+    // Catering items live on the cook's catering page only (never in the
+    // homepage feed) and are picked up on a buyer-scheduled future date.
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS is_catering BOOLEAN DEFAULT false`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS dish_likes (
@@ -398,10 +401,10 @@ export async function isAdmin(userId: number): Promise<boolean> {
   return result.rows[0]?.role === 'admin';
 }
 
-export async function createDish(sellerId: number, name: string, description: string, price: number, emoji: string, photoUrl: string | null) {
+export async function createDish(sellerId: number, name: string, description: string, price: number, emoji: string, photoUrl: string | null, isCatering: boolean = false) {
   const result = await sql`
-    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url)
-    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl})
+    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url, is_catering)
+    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl}, ${isCatering})
     RETURNING *
   `;
   return result.rows[0];
@@ -474,6 +477,7 @@ export async function getDishes(opts: GetDishesOptions = {}) {
     JOIN users u ON d.seller_id = u.id
     WHERE u.seller_status = 'approved'
       AND u.account_disabled = false
+      AND (d.is_catering IS DISTINCT FROM true)
       ${locFilter}
       ${searchClause}
     ORDER BY d.created_at DESC`;
@@ -1777,15 +1781,30 @@ export async function getCookPublicProfile(userId: number) {
     return null;
   }
 
-  // Their currently-posted dishes, excluding ones they've hidden from their profile.
+  // Their currently-posted daily dishes, excluding hidden and catering items.
   const dishesResult = await sql`
     SELECT d.id, d.name, d.description, d.price, d.emoji, d.photo_url, d.likes,
-           d.is_featured, d.created_at,
+           d.is_featured, d.is_catering, d.created_at,
            COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
            d.rating_count as review_count
     FROM dishes d
     WHERE d.seller_id = ${userId}
       AND (d.is_hidden_from_profile IS DISTINCT FROM true)
+      AND (d.is_catering IS DISTINCT FROM true)
+    ORDER BY d.is_featured DESC, d.created_at DESC
+  `;
+
+  // Their catering menu — shown in its own section, ordered ahead for a
+  // buyer-scheduled pickup date.
+  const cateringResult = await sql`
+    SELECT d.id, d.name, d.description, d.price, d.emoji, d.photo_url, d.likes,
+           d.is_featured, d.is_catering, d.created_at,
+           COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
+           d.rating_count as review_count
+    FROM dishes d
+    WHERE d.seller_id = ${userId}
+      AND (d.is_hidden_from_profile IS DISTINCT FROM true)
+      AND d.is_catering = true
     ORDER BY d.is_featured DESC, d.created_at DESC
   `;
 
@@ -1827,6 +1846,7 @@ export async function getCookPublicProfile(userId: number) {
   return {
     cook: user,
     dishes: dishesResult.rows,
+    cateringDishes: cateringResult.rows,
     aggregateRating: {
       avg: agg.avg_rating != null ? Number(agg.avg_rating) : null,
       count: agg.review_count,

@@ -37,6 +37,7 @@ interface Dish {
   review_count?: number;
   is_featured?: boolean;
   is_hidden_from_profile?: boolean;
+  is_catering?: boolean;
 }
 
 interface Review {
@@ -112,6 +113,7 @@ interface CartItem {
   seller_longitude: number | null;
   seller_pickup_min_minutes: number | null;
   seller_pickup_max_minutes: number | null;
+  is_catering?: boolean;
 }
 
 type OrderStatus = 'placed' | 'accepted' | 'cooking' | 'ready' | 'picked_up' | 'cancelled';
@@ -454,6 +456,11 @@ export default function Home() {
   const [earnings, setEarnings] = useState<any>(null);
   const [connectingStripe, setConnectingStripe] = useState(false);
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
+  // Catering: cooks flag new dishes as catering items; buyers schedule a
+  // pickup date (+ time) at checkout instead of the pickup-in-minutes slider.
+  const [newDishIsCatering, setNewDishIsCatering] = useState(false);
+  const [cateringDate, setCateringDate] = useState('');
+  const [cateringTime, setCateringTime] = useState('12:00');
   const [toast, setToast] = useState<string | null>(null);
   const [feedView, setFeedView] = useState<'list' | 'map'>('list');
   const [showingDirections, setShowingDirections] = useState(false);
@@ -1473,6 +1480,7 @@ export default function Home() {
   // Clamp pickup duration whenever the cart changes so it stays within cook bounds
   useEffect(() => {
     if (cart.length === 0) return;
+    if (cart.some(i => i.is_catering)) return; // catering uses a date picker, not the slider
     const mins = cart.map(i => i.seller_pickup_min_minutes ?? 15);
     const maxes = cart.map(i => i.seller_pickup_max_minutes ?? 120);
     const effectiveMin = Math.max(...mins);
@@ -1541,6 +1549,18 @@ export default function Home() {
 
   const addToCart = async () => {
     if (!selectedDish || !user) return;
+    // Catering and daily meals check out with different pickup timing, so a
+    // cart holds one kind at a time.
+    const cartHasCatering = cart.some(i => i.is_catering);
+    const cartHasDaily = cart.some(i => !i.is_catering);
+    if (selectedDish.is_catering && cartHasDaily) {
+      showToast('Finish your meal order first — catering is ordered separately');
+      return;
+    }
+    if (!selectedDish.is_catering && cartHasCatering) {
+      showToast('Finish your catering order first — daily meals are ordered separately');
+      return;
+    }
     try {
       await fetch('/api/cart', {
         method: 'POST',
@@ -1594,6 +1614,13 @@ export default function Home() {
   // Phase 1: get PaymentIntent(s) from Stripe, then show the payment screen.
   const placeOrder = async () => {
     if (!user || cart.length === 0) return;
+    if (cart.some(i => i.is_catering)) {
+      const chosen = cateringDate && cateringTime ? new Date(`${cateringDate}T${cateringTime}`) : null;
+      if (!chosen || isNaN(chosen.getTime()) || chosen.getTime() <= Date.now()) {
+        showToast('Choose a future pickup date for your catering order');
+        return;
+      }
+    }
     setCheckoutError(null);
     try {
       const res = await fetch('/api/stripe/checkout', {
@@ -1630,7 +1657,11 @@ export default function Home() {
   const finalizeOrder = async () => {
     if (!user) return;
     try {
-      const pickupAtIso = new Date(Date.now() + pickupDurationMin * 60_000).toISOString();
+      // Catering orders use the buyer's scheduled date; daily meals use the
+      // pickup-in-minutes slider.
+      const pickupAtIso = cart.some(i => i.is_catering) && cateringDate
+        ? new Date(`${cateringDate}T${cateringTime || '12:00'}`).toISOString()
+        : new Date(Date.now() + pickupDurationMin * 60_000).toISOString();
       await fetch('/api/cart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1735,7 +1766,7 @@ export default function Home() {
       setCookCancelSubmitting(false);
     }
   };
-  const addDish = async (dishName: string, priceValue: number) => {
+  const addDish = async (dishName: string, priceValue: number, isCatering: boolean) => {
     if (!user) return;
     try {
       const emojis = ['🍕', '🍔', '🌮', '🍝', '🥘', '🍗', '🍜', '🍰'];
@@ -1753,10 +1784,11 @@ export default function Home() {
           action: 'create',
           sellerId: user.id,
           name: dishName,
-          description: 'Homemade with love',
+          description: isCatering ? 'Catering — order ahead' : 'Homemade with love',
           price: priceValue,
           emoji,
           photoUrl,
+          isCatering,
         }),
       });
 
@@ -1770,10 +1802,13 @@ export default function Home() {
         seller_longitude: user.longitude,
       };
       setMyDishes([...myDishes, fullDish]);
-      setDishes([fullDish, ...dishes]);
+      // Catering items live on the cook's catering page only — never the feed
+      if (!isCatering) setDishes([fullDish, ...dishes]);
       setDishPhotoFile(null);
       setDishPhotoPreview(null);
+      setNewDishIsCatering(false);
       if (dishFileInputRef.current) dishFileInputRef.current.value = '';
+      showToast(isCatering ? 'Added to your catering menu' : 'Added to your menu');
     } catch (error) { console.error(error); }
   };
 
@@ -2472,7 +2507,8 @@ export default function Home() {
     return `${days}d ago`;
   };
 
-  // Format a pickup timestamp as "6:47 PM · in 32 min" or "6:47 PM · overdue by 5 min"
+  // Format a pickup timestamp as "6:47 PM · in 32 min" or "6:47 PM · overdue by 5 min".
+  // Pickups on another day (catering) show the date: "Sat, Jul 26, 12:00 PM · in 3d".
   const formatPickupAt = (iso: string | null): { clock: string; relative: string; overdue: boolean } | null => {
     if (!iso) return null;
     const t = new Date(iso);
@@ -2480,10 +2516,17 @@ export default function Home() {
     const mm = String(t.getMinutes()).padStart(2, '0');
     const ampm = hh >= 12 ? 'PM' : 'AM';
     const displayH = hh % 12 === 0 ? 12 : hh % 12;
-    const clock = `${displayH}:${mm} ${ampm}`;
+    const sameDay = t.toDateString() === new Date().toDateString();
+    const clock = sameDay
+      ? `${displayH}:${mm} ${ampm}`
+      : `${t.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}, ${displayH}:${mm} ${ampm}`;
     const diffMin = Math.round((t.getTime() - Date.now()) / 60000);
     if (diffMin > 0) {
-      const relative = diffMin < 60 ? `in ${diffMin} min` : `in ${Math.floor(diffMin / 60)}h ${diffMin % 60}m`;
+      const relative = diffMin < 60
+        ? `in ${diffMin} min`
+        : diffMin < 24 * 60
+          ? `in ${Math.floor(diffMin / 60)}h ${diffMin % 60}m`
+          : `in ${Math.round(diffMin / (24 * 60))}d`;
       return { clock, relative, overdue: false };
     }
     if (diffMin === 0) return { clock, relative: 'now', overdue: false };
@@ -3164,6 +3207,9 @@ export default function Home() {
                   </span>
                 )}
                 <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>Homemade</span>
+                {selectedDish.is_catering && (
+                  <span style={{ background: C.green, color: '#fff', padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>Catering · pick your date at checkout</span>
+                )}
               </div>
 
               {selectedDish.description && (
@@ -3417,7 +3463,55 @@ export default function Home() {
 
                 <div style={{ padding: '18px 22px 0' }}>
                   <div style={{ background: C.card, borderRadius: 14, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
-                    {(() => {
+                    {cart.some(i => i.is_catering) ? (() => {
+                      // Catering: buyer schedules a pickup date (tomorrow up to 60 days out)
+                      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+                      const maxDay = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000);
+                      const toYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                      const minYMD = toYMD(tomorrow);
+                      const chosen = cateringDate && cateringTime ? new Date(`${cateringDate}T${cateringTime}`) : null;
+                      const valid = chosen != null && !isNaN(chosen.getTime()) && chosen.getTime() > Date.now();
+                      return (
+                        <>
+                          <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 4 }}>Schedule your catering pickup</div>
+                          <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 12 }}>
+                            Pick a date and time — the cook confirms when they accept your order.
+                          </div>
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <div style={{ flex: 1.4 }}>
+                              <div style={{ font: `500 11.5px ${font.sans}`, color: C.muted, marginBottom: 4 }}>Date</div>
+                              <input
+                                type="date"
+                                min={minYMD}
+                                max={toYMD(maxDay)}
+                                value={cateringDate}
+                                onChange={(e) => setCateringDate(e.target.value)}
+                                style={{ width: '100%', padding: '10px 10px', border: `1px solid ${C.divider}`, borderRadius: 9, font: `500 13.5px ${font.sans}`, background: '#fff', color: C.ink }}
+                              />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ font: `500 11.5px ${font.sans}`, color: C.muted, marginBottom: 4 }}>Time</div>
+                              <input
+                                type="time"
+                                value={cateringTime}
+                                onChange={(e) => setCateringTime(e.target.value)}
+                                style={{ width: '100%', padding: '10px 10px', border: `1px solid ${C.divider}`, borderRadius: 9, font: `500 13.5px ${font.sans}`, background: '#fff', color: C.ink }}
+                              />
+                            </div>
+                          </div>
+                          {!valid && (
+                            <div style={{ marginTop: 10, font: `400 11.5px ${font.sans}`, color: C.terracotta }}>
+                              {cateringDate ? 'Pickup must be in the future.' : 'Choose a pickup date to place your order.'}
+                            </div>
+                          )}
+                          {valid && chosen && (
+                            <div style={{ marginTop: 10, font: `400 11.5px ${font.sans}`, color: C.green }}>
+                              Pickup {chosen.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} at {chosen.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })() : (() => {
                       // Compute effective bounds: intersection of all cook bounds in cart.
                       const mins = cart.map(i => i.seller_pickup_min_minutes ?? 15);
                       const maxes = cart.map(i => i.seller_pickup_max_minutes ?? 120);
@@ -3915,17 +4009,32 @@ export default function Home() {
                   <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>{dishPhotoFile ? dishPhotoFile.name : 'Tap to add a photo'}</span>
                 </div>
 
+                <label
+                  onClick={() => setNewDishIsCatering(!newDishIsCatering)}
+                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: 10, padding: 12, background: newDishIsCatering ? C.greenLight : C.cardAlt, borderRadius: 10, marginBottom: 12, border: `2px solid ${newDishIsCatering ? C.green : 'transparent'}` }}
+                >
+                  <div style={{ width: 20, height: 20, borderRadius: 6, background: newDishIsCatering ? C.green : '#fff', border: `2px solid ${newDishIsCatering ? C.green : C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', color: '#fff', font: `700 12px ${font.sans}`, marginTop: 1 }}>
+                    {newDishIsCatering ? '✓' : ''}
+                  </div>
+                  <div>
+                    <div style={{ font: `500 13.5px ${font.sans}`, color: newDishIsCatering ? C.green : C.ink }}>Catering item</div>
+                    <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                      Shows on your catering page instead of the daily feed. Buyers schedule a pickup date when ordering.
+                    </div>
+                  </div>
+                </label>
+
                 <button onClick={() => {
                   const nameInput = document.getElementById('dishName') as HTMLInputElement;
                   const priceInput = document.getElementById('dishPrice') as HTMLInputElement;
                   const priceValue = parseFloat(priceInput.value);
                   if (nameInput.value.trim() && priceValue > 0) {
-                    addDish(nameInput.value.trim(), priceValue);
+                    addDish(nameInput.value.trim(), priceValue, newDishIsCatering);
                     nameInput.value = '';
                     priceInput.value = '';
                   }
                 }} style={{ width: '100%', padding: 12, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 14px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                  <Plus size={16} /> Add to menu
+                  <Plus size={16} /> {newDishIsCatering ? 'Add to catering menu' : 'Add to menu'}
                 </button>
               </div>
             ) : user.seller_status === 'not_seller' && user.legal_name && user.kitchen_name && user.cottage_food_attested && user.has_permit != null && user.kitchen_environment && user.cooking_hours && user.pickup_description && user.prep_address ? (
@@ -3954,7 +4063,12 @@ export default function Home() {
                           <PhotoTile dish={dish} height={40} radius={8} />
                         </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ font: `500 14px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dish.name}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                            <div style={{ font: `500 14px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dish.name}</div>
+                            {dish.is_catering && (
+                              <span style={{ flex: 'none', background: C.green, color: '#fff', padding: '2px 6px', borderRadius: 5, font: `500 9px ${font.sans}`, letterSpacing: '.03em' }}>CATERING</span>
+                            )}
+                          </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                             <span style={{ font: `400 12px ${font.sans}`, color: C.muted }}>$</span>
                             <input
