@@ -677,6 +677,9 @@ export default function Home() {
   const [adminSelectedUser, setAdminSelectedUser] = useState<AdminUserDetail | null>(null);
   const [adminDeleteConfirmingFor, setAdminDeleteConfirmingFor] = useState<number | null>(null);
   const [adminDeleteChecked, setAdminDeleteChecked] = useState(false);
+  // Role changes take effect instantly, so require an explicit confirm step
+  // before granting/removing staff access.
+  const [adminRoleConfirm, setAdminRoleConfirm] = useState<{ userId: number; role: 'user' | 'admin' | 'secondary_admin' | 'support' } | null>(null);
   const [adminSelectedUserOrders, setAdminSelectedUserOrders] = useState<any[]>([]);
   const [adminDishes, setAdminDishes] = useState<AdminDishRow[]>([]);
   const [adminDishSearch, setAdminDishSearch] = useState('');
@@ -980,6 +983,7 @@ export default function Home() {
   };
 
   const loadAdminUserDetail = async (userId: number) => {
+    setAdminRoleConfirm(prev => (prev && prev.userId !== userId ? null : prev));
     try {
       const [detailRes, ordersRes] = await Promise.all([
         fetch(`/api/admin?action=userDetail&userId=${userId}`),
@@ -1177,6 +1181,7 @@ export default function Home() {
     const result = await adminAction({ action: 'setRole', userId, role });
     if (result) {
       showToast(role === 'user' ? 'Staff role removed' : `Role set: ${ROLE_NAME[role]}`);
+      setAdminRoleConfirm(null);
       if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
     }
   };
@@ -6177,15 +6182,49 @@ export default function Home() {
                         ] as const).filter(r => user.role === 'admin' || r.key === 'user' || r.key === 'support').map(r => (
                           <button
                             key={r.key}
-                            onClick={() => u.role !== r.key && adminSetRole(u.id, r.key)}
+                            onClick={() => u.role !== r.key && setAdminRoleConfirm({ userId: u.id, role: r.key })}
                             disabled={adminActionSubmitting || u.role === r.key}
-                            style={{ padding: '8px 6px', background: u.role === r.key ? C.ink : '#fff', color: u.role === r.key ? '#fff' : C.ink, border: `1px solid ${u.role === r.key ? C.ink : C.divider}`, borderRadius: 8, textAlign: 'left' }}
+                            style={{ padding: '8px 6px', background: u.role === r.key ? C.ink : adminRoleConfirm?.userId === u.id && adminRoleConfirm?.role === r.key ? '#fff9e6' : '#fff', color: u.role === r.key ? '#fff' : C.ink, border: `1px solid ${u.role === r.key ? C.ink : adminRoleConfirm?.userId === u.id && adminRoleConfirm?.role === r.key ? '#f0d67a' : C.divider}`, borderRadius: 8, textAlign: 'left' }}
                           >
                             <div style={{ font: `500 12px ${font.sans}` }}>{r.label}</div>
                             <div style={{ font: `400 10px ${font.sans}`, opacity: .7, marginTop: 1 }}>{r.hint}</div>
                           </button>
                         ))}
                       </div>
+
+                      {/* Accidental-appointment guard: nothing changes until
+                          the choice is confirmed here. */}
+                      {adminRoleConfirm && adminRoleConfirm.userId === u.id && (
+                        <div style={{ marginTop: 8, padding: 12, background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 10 }}>
+                          <div style={{ font: `500 13px ${font.sans}`, color: '#7a5c0b', marginBottom: 4 }}>
+                            {adminRoleConfirm.role === 'user'
+                              ? `Remove ${u.name}'s staff role?`
+                              : `Make ${u.name} ${adminRoleConfirm.role === 'admin' ? 'a Chief admin' : adminRoleConfirm.role === 'secondary_admin' ? 'an Admin' : 'Support staff'}?`}
+                          </div>
+                          <div style={{ font: `400 12px ${font.sans}`, color: C.ink, marginBottom: 10, lineHeight: 1.4 }}>
+                            {adminRoleConfirm.role === 'user' && 'They immediately lose all staff access.'}
+                            {adminRoleConfirm.role === 'support' && 'They can immediately view and resolve bug reports, and can enable bug alert notifications.'}
+                            {adminRoleConfirm.role === 'secondary_admin' && 'They immediately get the full admin panel except financials, and can manage support staff.'}
+                            {adminRoleConfirm.role === 'admin' && 'They immediately get FULL access: financials, pricing, every role, and permanent user deletion.'}
+                          </div>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              onClick={() => setAdminRoleConfirm(null)}
+                              disabled={adminActionSubmitting}
+                              style={{ flex: 1, padding: 8, background: C.cardAlt, color: C.ink, borderRadius: 8, font: `500 12px ${font.sans}` }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => adminRoleConfirm && adminSetRole(u.id, adminRoleConfirm.role)}
+                              disabled={adminActionSubmitting}
+                              style={{ flex: 2, padding: 8, background: C.ink, color: '#fff', borderRadius: 8, font: `500 12px ${font.sans}`, opacity: adminActionSubmitting ? 0.5 : 1 }}
+                            >
+                              {adminActionSubmitting ? 'Saving…' : 'Yes, change role'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                  {user.role === 'admin' && (adminDeleteConfirmingFor !== u.id ? (
