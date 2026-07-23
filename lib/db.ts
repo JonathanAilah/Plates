@@ -480,6 +480,14 @@ export async function getDishes(opts: GetDishesOptions = {}) {
 export async function getDish(id: number) {
   const result = await sql`
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.id as seller_id,
+           u.photo_url as seller_photo_url,
+           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           u.kitchen_flags as seller_kitchen_flags,
+           u.kitchen_environment as seller_kitchen_environment,
+           u.pickup_description as seller_pickup_description,
+           u.cooking_hours as seller_cooking_hours,
+           u.pickup_min_minutes as seller_pickup_min_minutes,
+           u.pickup_max_minutes as seller_pickup_max_minutes,
            COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
            d.rating_count as review_count
     FROM dishes d

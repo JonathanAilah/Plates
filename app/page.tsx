@@ -1260,6 +1260,25 @@ export default function Home() {
               { timeout: 8000 }
             );
           }
+
+          // Deep link: /?dish=123 (used by cook profile pages) opens that
+          // meal's info screen directly instead of landing on the feed.
+          const dishParam = new URLSearchParams(window.location.search).get('dish');
+          if (dishParam) {
+            const dishId = Number(dishParam);
+            let target = Number.isFinite(dishId) ? dishArr.find(d => d.id === dishId) ?? null : null;
+            if (!target && Number.isFinite(dishId)) {
+              try {
+                const res = await fetch(`/api/dishes?action=getOne&id=${dishId}`);
+                if (res.ok) target = await res.json();
+              } catch { /* fall through to feed */ }
+            }
+            if (target && target.id) {
+              openMeal(target);
+              // Clear the param so refresh/back returns to the feed
+              window.history.replaceState(null, '', '/');
+            }
+          }
         }
       } catch (error) {
         console.error('Init error:', error);
@@ -2654,18 +2673,16 @@ export default function Home() {
                             <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
                             <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
                           </div>
-                          <a
-                            href={`/cook/${dish.seller_id}`}
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}`, textDecoration: 'none' }}
-                          >
+                          {/* Cook identity — display only. Tapping anywhere on the card opens
+                              the meal; the cook's page is linked from the meal screen. */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
                             {dish.seller_photo_url ? (
                               <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
                             ) : (
                               <span style={{ width: 17, height: 17, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 9px ${font.sans}` }}>{dish.seller_avatar}</span>
                             )}
-                            <span style={{ textDecoration: 'underline', textDecorationColor: 'transparent' }}>{dish.seller_name}</span>
-                          </a>
+                            <span>{dish.seller_name}</span>
+                          </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
                             {dist !== null && (
                               <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
