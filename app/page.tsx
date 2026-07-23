@@ -244,6 +244,7 @@ interface User {
   longitude: number | null;
   kitchen_latitude?: number | null; // pickup spot, from the prep address
   kitchen_longitude?: number | null;
+  location_sharing?: boolean | null; // false = user opted out of live location
   prep_address: string | null;
   legal_name: string | null;
   kitchen_name: string | null;
@@ -1561,6 +1562,9 @@ export default function Home() {
           // only when latitude was null — but cook onboarding wrote the
           // kitchen address into the same columns, so the location froze at
           // the kitchen forever. Kitchen coords now live separately.)
+          // Sync the opt-out ref first — the effect that mirrors it hasn't
+          // run yet at this point in the boot.
+          locationOptOutRef.current = currentUser.location_sharing === false;
           refreshLiveLocation();
 
           // Deep link: /?dish=123 (used by cook profile pages) opens that
@@ -1607,7 +1611,15 @@ export default function Home() {
   // returns to the foreground — moving around with the app backgrounded is
   // picked up the moment it's looked at again. No continuous tracking.
   const lastLocationFixAt = useRef(0);
+  // Mirror of the opt-out flag for callbacks with stale closures (the
+  // visibilitychange listener outlives renders).
+  const locationOptOutRef = useRef(false);
+  useEffect(() => {
+    locationOptOutRef.current = user?.location_sharing === false;
+  }, [user?.location_sharing]);
+
   const refreshLiveLocation = () => {
+    if (locationOptOutRef.current) return; // user said no — respect it
     if (!navigator.geolocation) return;
     if (Date.now() - lastLocationFixAt.current < 120000) return;
     navigator.geolocation.getCurrentPosition(
@@ -2497,17 +2509,44 @@ export default function Home() {
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
+        // Re-arm sharing first (a previous opt-out blocks location writes)
+        locationOptOutRef.current = false;
+        await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'setLocationSharing', enabled: true }),
+        }).catch(() => {});
         const res = await fetch('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'updateLocation', id: user.id, latitude, longitude }),
+          body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
         });
         const updated = await res.json();
         setUser(updated);
+        lastLocationFixAt.current = Date.now();
       },
-      () => { },
+      () => { showToast('Could not get your location — check browser permission'); },
       { timeout: 8000 }
     );
+  };
+
+  // Opt out of live location: clears stored coords server-side and blocks
+  // the automatic per-visit refresh until the user shares again.
+  const stopSharingLocation = async () => {
+    if (!user) return;
+    locationOptOutRef.current = true;
+    try {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setLocationSharing', enabled: false }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setUser(updated);
+        showToast('Location sharing off');
+      }
+    } catch (e) { console.error(e); }
   };
 
   const saveAddress = async (address: string, latitude: number, longitude: number) => {
@@ -4171,8 +4210,11 @@ export default function Home() {
             <div style={{ background: C.card, padding: 14, borderRadius: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ font: `400 14px ${font.sans}`, color: C.inkSoft, display: 'flex', alignItems: 'center', gap: 6 }}><MapPin size={14} /> Location</span>
-                {user.latitude != null ? (
-                  <span style={{ font: `500 13px ${font.sans}`, color: C.green }}>Shared</span>
+                {user.latitude != null && user.location_sharing !== false ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ font: `500 13px ${font.sans}`, color: C.green }}>Shared</span>
+                    <button onClick={stopSharingLocation} style={{ padding: '6px 12px', background: C.cardAlt, borderRadius: 8, font: `500 13px ${font.sans}`, color: '#c94b4b' }}>Stop</button>
+                  </span>
                 ) : (
                   <button onClick={requestLocation} style={{ padding: '6px 12px', background: C.cardAlt, borderRadius: 8, font: `500 13px ${font.sans}`, color: C.inkSoft }}>Share location</button>
                 )}
