@@ -74,6 +74,15 @@ async function runMigrations(): Promise<void> {
     // orders keep original numbers even if the fee rate changes later)
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS platform_fee DECIMAL(10, 2)`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cook_earnings DECIMAL(10, 2)`;
+    // Backfill orders placed before checkoutCart actually computed this split
+    // (it declared these columns but never wrote them). Safe to re-run: only
+    // touches rows still missing a value.
+    await sql`
+      UPDATE orders
+      SET platform_fee = ROUND(total_price * ${PLATES_FEE_PERCENT}, 2),
+          cook_earnings = total_price - ROUND(total_price * ${PLATES_FEE_PERCENT}, 2)
+      WHERE platform_fee IS NULL
+    `;
     // Backfill: any user who is currently is_seller=true should be treated as approved
     await sql`UPDATE users SET seller_status = 'approved' WHERE is_seller = true AND seller_status = 'not_seller'`;
 
@@ -1020,9 +1029,14 @@ export async function checkoutCart(
     const linePrice = Number(item.price) * item.quantity;
     total += linePrice;
     const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
+    // Record the platform/cook split at order time, matching the
+    // application_fee_amount Stripe actually deducts at checkout. Without
+    // this, every earnings/financials view has nothing to sum.
+    const platformFee = Math.round(linePrice * PLATES_FEE_PERCENT * 100) / 100;
+    const cookEarnings = Math.round((linePrice - platformFee) * 100) / 100;
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings})
       RETURNING *
     `;
     orders.push(order.rows[0]);
@@ -1440,6 +1454,164 @@ export async function getAdminFinancials() {
     totals: totals.rows[0],
     topCooks: topCooks.rows,
     trend: trend.rows,
+  };
+}
+
+// ============= ADMIN FINANCIAL DRILL-DOWN =============
+// Backing the detail pages behind each Financials card: a searchable,
+// paginated list of every order, a searchable/paginated list of cooks with
+// their payout totals, and a per-cook detail (summary + upcoming/past
+// orders). All paginated — this scans the whole orders table otherwise.
+
+export interface AdminOrdersListOptions {
+  search?: string | null;
+  status?: string | null; // OrderStatus, or 'all'/omitted for no filter
+  limit?: number;
+  offset?: number;
+}
+
+export async function getAllOrdersForAdmin(opts: AdminOrdersListOptions = {}) {
+  const limit = opts.limit ?? 30;
+  const offset = opts.offset ?? 0;
+  const q = opts.search?.trim() ? `%${opts.search.trim().toLowerCase()}%` : null;
+  const status = opts.status && opts.status !== 'all' ? opts.status : null;
+
+  const params: unknown[] = [];
+  let where = 'WHERE 1=1';
+  if (q) {
+    params.push(q);
+    const p = `$${params.length}`;
+    where += ` AND (o.id::text ILIKE ${p} OR LOWER(b.name) LIKE ${p} OR LOWER(b.email) LIKE ${p}
+                OR LOWER(s.name) LIKE ${p} OR LOWER(s.kitchen_name) LIKE ${p} OR LOWER(d.name) LIKE ${p})`;
+  }
+  if (status) {
+    params.push(status);
+    where += ` AND o.status = $${params.length}`;
+  }
+  params.push(limit);
+  const limitParam = `$${params.length}`;
+  params.push(offset);
+  const offsetParam = `$${params.length}`;
+
+  const result = await sql.query(
+    `SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
+            o.created_at, o.pickup_at, o.side_choice,
+            d.name as dish_name, d.emoji as dish_emoji,
+            b.id as buyer_id, b.name as buyer_name,
+            s.id as seller_id, s.name as seller_name, s.kitchen_name as seller_kitchen_name
+     FROM orders o
+     JOIN dishes d ON o.dish_id = d.id
+     JOIN users b ON o.buyer_id = b.id
+     JOIN users s ON d.seller_id = s.id
+     ${where}
+     ORDER BY o.created_at DESC
+     LIMIT ${limitParam} OFFSET ${offsetParam}`,
+    params,
+  );
+  return result.rows;
+}
+
+export interface AdminCookPayoutsListOptions {
+  search?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getAllCooksForAdminPayouts(opts: AdminCookPayoutsListOptions = {}) {
+  const limit = opts.limit ?? 30;
+  const offset = opts.offset ?? 0;
+  const q = opts.search?.trim() ? `%${opts.search.trim().toLowerCase()}%` : null;
+
+  const params: unknown[] = [];
+  let where = "WHERE u.seller_status = 'approved'";
+  if (q) {
+    params.push(q);
+    const p = `$${params.length}`;
+    where += ` AND (LOWER(u.name) LIKE ${p} OR LOWER(u.kitchen_name) LIKE ${p} OR LOWER(u.email) LIKE ${p})`;
+  }
+  params.push(limit);
+  const limitParam = `$${params.length}`;
+  params.push(offset);
+  const offsetParam = `$${params.length}`;
+
+  const result = await sql.query(
+    `SELECT u.id, u.name, u.kitchen_name, u.avatar, u.photo_url,
+            u.stripe_charges_enabled, u.stripe_payouts_enabled,
+            COALESCE(SUM(o.total_price) FILTER (WHERE o.status != 'cancelled'), 0) as total_sales,
+            COALESCE(SUM(o.platform_fee) FILTER (WHERE o.status != 'cancelled'), 0) as platform_revenue,
+            COALESCE(SUM(o.cook_earnings) FILTER (WHERE o.status != 'cancelled'), 0) as cook_earnings,
+            COUNT(o.id) FILTER (WHERE o.status != 'cancelled')::int as order_count
+     FROM users u
+     LEFT JOIN dishes d ON d.seller_id = u.id
+     LEFT JOIN orders o ON o.dish_id = d.id
+     ${where}
+     GROUP BY u.id, u.name, u.kitchen_name, u.avatar, u.photo_url, u.stripe_charges_enabled, u.stripe_payouts_enabled
+     ORDER BY total_sales DESC
+     LIMIT ${limitParam} OFFSET ${offsetParam}`,
+    params,
+  );
+  return result.rows;
+}
+
+export async function getCookPayoutDetail(
+  cookId: number,
+  opts: { pastLimit?: number; pastOffset?: number } = {},
+) {
+  const pastLimit = opts.pastLimit ?? 30;
+  const pastOffset = opts.pastOffset ?? 0;
+
+  const cookResult = await sql`
+    SELECT id, name, kitchen_name, avatar, photo_url, email,
+           stripe_charges_enabled, stripe_payouts_enabled
+    FROM users WHERE id = ${cookId} LIMIT 1
+  `;
+  const cook = cookResult.rows[0];
+  if (!cook) return null;
+
+  const summaryResult = await sql`
+    SELECT
+      COALESCE(SUM(o.total_price), 0) as total_sales,
+      COALESCE(SUM(o.platform_fee), 0) as platform_revenue,
+      COALESCE(SUM(o.cook_earnings), 0) as cook_earnings,
+      COUNT(*)::int as order_count
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${cookId} AND o.status != 'cancelled'
+  `;
+
+  // Active orders: money already earned per our stored split (Stripe moves
+  // funds to the cook's connected account at charge time), pickup pending.
+  const upcomingResult = await sql`
+    SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
+           o.created_at, o.pickup_at, o.side_choice,
+           d.name as dish_name, d.emoji as dish_emoji,
+           b.name as buyer_name
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    JOIN users b ON o.buyer_id = b.id
+    WHERE d.seller_id = ${cookId} AND o.status NOT IN ('picked_up', 'cancelled')
+    ORDER BY o.pickup_at ASC NULLS LAST, o.created_at ASC
+    LIMIT 100
+  `;
+
+  const pastResult = await sql`
+    SELECT o.id, o.quantity, o.total_price, o.platform_fee, o.cook_earnings, o.status,
+           o.created_at, o.pickup_at, o.updated_at, o.side_choice,
+           d.name as dish_name, d.emoji as dish_emoji,
+           b.name as buyer_name
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    JOIN users b ON o.buyer_id = b.id
+    WHERE d.seller_id = ${cookId} AND o.status = 'picked_up'
+    ORDER BY o.updated_at DESC
+    LIMIT ${pastLimit} OFFSET ${pastOffset}
+  `;
+
+  return {
+    cook,
+    summary: summaryResult.rows[0],
+    upcoming: upcomingResult.rows,
+    past: pastResult.rows,
   };
 }
 
