@@ -794,17 +794,27 @@ export default function Home() {
 
   // Withdraw Funds: moves the cook's full available Plates balance to their
   // connected bank via Stripe. Amount is decided server-side.
-  const withdrawFunds = async () => {
+  const withdrawFunds = async (instant: boolean = false) => {
     if (withdrawing) return;
     setWithdrawing(true);
     try {
-      const res = await fetch('/api/stripe/withdraw', { method: 'POST' });
+      const res = await fetch('/api/stripe/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instant }),
+      });
       const data = await res.json();
       if (!res.ok) {
         showToast(data.error || 'Withdrawal failed');
         return;
       }
-      showToast(`$${Number(data.withdrawal.amount).toFixed(2)} on its way to your bank`);
+      if (data.notice) {
+        showToast(data.notice);
+      } else if (data.withdrawal.method === 'instant') {
+        showToast(`$${(Number(data.withdrawal.amount) - Number(data.withdrawal.fee || 0)).toFixed(2)} arriving in minutes ⚡`);
+      } else {
+        showToast(`$${Number(data.withdrawal.amount).toFixed(2)} on its way to your bank`);
+      }
       await loadEarnings();
     } catch (e) {
       console.error('Withdraw error:', e);
@@ -4427,7 +4437,7 @@ export default function Home() {
                     </div>
                   </div>
                   <button
-                    onClick={withdrawFunds}
+                    onClick={() => withdrawFunds(false)}
                     disabled={withdrawing || Number(earnings.balance?.available || 0) < 1}
                     style={{
                       width: '100%', padding: 12, borderRadius: 10, font: `500 14px ${font.sans}`,
@@ -4436,13 +4446,29 @@ export default function Home() {
                     }}
                   >
                     {withdrawing
-                      ? 'Sending to your bank…'
+                      ? 'Sending…'
                       : Number(earnings.balance?.available || 0) >= 1
                         ? `Withdraw $${Number(earnings.balance.available).toFixed(2)}`
                         : 'Withdraw funds'}
                   </button>
+                  <button
+                    onClick={() => withdrawFunds(true)}
+                    disabled={withdrawing || Number(earnings.balance?.available || 0) < 2}
+                    style={{
+                      width: '100%', padding: 12, borderRadius: 10, font: `500 14px ${font.sans}`, marginTop: 8,
+                      background: 'transparent',
+                      border: `1px solid ${(!withdrawing && Number(earnings.balance?.available || 0) >= 2) ? C.green : C.divider}`,
+                      color: (!withdrawing && Number(earnings.balance?.available || 0) >= 2) ? C.green : C.muted,
+                    }}
+                  >
+                    {withdrawing
+                      ? 'Sending…'
+                      : Number(earnings.balance?.available || 0) >= 2
+                        ? `⚡ Instant — get $${(Number(earnings.balance.available) - 1).toFixed(2)} in minutes ($1 fee)`
+                        : '⚡ Instant withdrawal ($1 fee · $2 minimum)'}
+                  </button>
                   <div style={{ font: `400 10.5px/1.5 ${font.sans}`, color: C.muted, marginTop: 8 }}>
-                    Earnings become available once an order is picked up. Withdrawals go to the bank connected in Profile → Payments.
+                    Earnings become available once an order is picked up. Standard withdrawals reach your bank in 1–2 business days, free. Instant sends to an eligible debit card in minutes for a $1 fee. Bank is set in Profile → Payments.
                   </div>
                 </div>
 
@@ -4451,7 +4477,11 @@ export default function Home() {
                     <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Withdrawal history</div>
                     {earnings.withdrawals.slice(0, 5).map((w: any) => (
                       <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
-                        <span>${Number(w.amount).toFixed(2)}</span>
+                        <span>
+                          ${Number(w.amount).toFixed(2)}
+                          {w.method === 'instant' && <span style={{ color: C.muted, font: `400 10.5px ${font.sans}` }}> · ⚡ instant, $1 fee</span>}
+                          {w.method === 'instant_fallback' && <span style={{ color: C.muted, font: `400 10.5px ${font.sans}` }}> · sent standard</span>}
+                        </span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span style={{ color: C.muted, font: `400 11px ${font.sans}` }}>{timeAgo(w.created_at)}</span>
                           <span style={{
