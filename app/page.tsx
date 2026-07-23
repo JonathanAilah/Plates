@@ -534,6 +534,7 @@ export default function Home() {
   const [feeSaving, setFeeSaving] = useState(false);
   const [earnings, setEarnings] = useState<any>(null);
   const [connectingStripe, setConnectingStripe] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [pickupDurationMin, setPickupDurationMin] = useState<number>(30);
   // Catering: cooks flag new dishes as catering items; buyers schedule a
   // pickup date (+ time) at checkout instead of the pickup-in-minutes slider.
@@ -721,6 +722,28 @@ export default function Home() {
       setEarnings(data);
     } catch (e) {
       console.error('Load earnings error:', e);
+    }
+  };
+
+  // Withdraw Funds: moves the cook's full available Plates balance to their
+  // connected bank via Stripe. Amount is decided server-side.
+  const withdrawFunds = async () => {
+    if (withdrawing) return;
+    setWithdrawing(true);
+    try {
+      const res = await fetch('/api/stripe/withdraw', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Withdrawal failed');
+        return;
+      }
+      showToast(`$${Number(data.withdrawal.amount).toFixed(2)} on its way to your bank`);
+      await loadEarnings();
+    } catch (e) {
+      console.error('Withdraw error:', e);
+      showToast('Network error — your balance was not deducted');
+    } finally {
+      setWithdrawing(false);
     }
   };
   const loadMessages = async (orderId: string, userId: number) => {
@@ -4140,24 +4163,58 @@ export default function Home() {
                     <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>This month · {earnings.earnings?.thisMonth?.order_count || 0} orders</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.available || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to pay out</div>
+                {/* Plates balance — held by the platform until withdrawn */}
+                <div style={{ background: C.surface, borderRadius: 12, padding: 14, border: `1px solid ${C.divider}` }}>
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(earnings.balance?.available || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Available to withdraw</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 16px ${font.serif}`, color: C.ink }}>${Number(earnings.balance?.pending || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending pickup</div>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ font: `500 16px ${font.serif}`, color: C.ink }}>${Number(earnings.balance?.withdrawn || 0).toFixed(2)}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Withdrawn</div>
+                    </div>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>${Number(earnings.stripe?.pending || 0).toFixed(2)}</div>
-                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>Pending in Stripe</div>
+                  <button
+                    onClick={withdrawFunds}
+                    disabled={withdrawing || Number(earnings.balance?.available || 0) < 1}
+                    style={{
+                      width: '100%', padding: 12, borderRadius: 10, font: `500 14px ${font.sans}`,
+                      background: (!withdrawing && Number(earnings.balance?.available || 0) >= 1) ? C.green : C.cardAlt,
+                      color: (!withdrawing && Number(earnings.balance?.available || 0) >= 1) ? '#fff' : C.muted,
+                    }}
+                  >
+                    {withdrawing
+                      ? 'Sending to your bank…'
+                      : Number(earnings.balance?.available || 0) >= 1
+                        ? `Withdraw $${Number(earnings.balance.available).toFixed(2)}`
+                        : 'Withdraw funds'}
+                  </button>
+                  <div style={{ font: `400 10.5px/1.5 ${font.sans}`, color: C.muted, marginTop: 8 }}>
+                    Earnings become available once an order is picked up. Withdrawals go to the bank connected in Profile → Payments.
                   </div>
                 </div>
 
-                {earnings.stripe?.payouts?.length > 0 && (
+                {earnings.withdrawals?.length > 0 && (
                   <div style={{ marginTop: 14, borderTop: `1px solid ${C.divider}`, paddingTop: 12 }}>
-                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent payouts</div>
-                    {earnings.stripe.payouts.slice(0, 5).map((p: any) => (
-                      <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
-                        <span>${Number(p.amount).toFixed(2)}</span>
-                        <span style={{ color: C.muted }}>{p.status}</span>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Withdrawal history</div>
+                    {earnings.withdrawals.slice(0, 5).map((w: any) => (
+                      <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', font: `400 12.5px ${font.sans}`, color: C.inkSoft, padding: '4px 0' }}>
+                        <span>${Number(w.amount).toFixed(2)}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ color: C.muted, font: `400 11px ${font.sans}` }}>{timeAgo(w.created_at)}</span>
+                          <span style={{
+                            padding: '2px 8px', borderRadius: 8, font: `500 10.5px ${font.sans}`,
+                            background: w.status === 'paid' ? C.greenLight : w.status === 'failed' ? '#fceded' : C.cardAlt,
+                            color: w.status === 'paid' ? C.green : w.status === 'failed' ? '#8a2a2a' : C.inkSoft,
+                          }}>
+                            {w.status === 'paid' ? 'Sent' : w.status === 'failed' ? 'Failed' : 'Processing'}
+                          </span>
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -6061,9 +6118,38 @@ export default function Home() {
               </div>
             </div>
 
+            {adminCookDetail.balance && (
+              <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                <div style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 12 }}>
+                  <div style={{ font: `600 16px ${font.serif}`, color: C.green }}>${Number(adminCookDetail.balance.available).toFixed(2)}</div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.green }}>Available balance</div>
+                </div>
+                <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
+                  <div style={{ font: `600 16px ${font.serif}`, color: C.ink }}>${Number(adminCookDetail.balance.pending).toFixed(2)}</div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Pending pickup</div>
+                </div>
+                <div style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 12 }}>
+                  <div style={{ font: `600 16px ${font.serif}`, color: C.ink }}>${Number(adminCookDetail.balance.withdrawn).toFixed(2)}</div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted }}>Withdrawn</div>
+                </div>
+              </div>
+            )}
+
             <div style={{ font: `400 11px/1.5 ${font.sans}`, color: C.muted, background: C.cardAlt, borderRadius: 10, padding: 10, marginBottom: 16 }}>
-              Stripe transfers each order's earnings to this cook's connected account at checkout — Plates doesn't hold or schedule the payout itself. "Upcoming" below means the pickup hasn't happened yet, not that money is in transit.
+              Plates holds buyer payments; a cook's share becomes available for withdrawal once the order is picked up, and moves to their bank when they tap Withdraw Funds. "Upcoming" below is money that will be released at pickup.
             </div>
+
+            {adminCookDetail.withdrawals?.length > 0 && (
+              <div style={{ background: C.card, borderRadius: 12, padding: 12, marginBottom: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 8 }}>Recent withdrawals</div>
+                {adminCookDetail.withdrawals.slice(0, 5).map((w: any) => (
+                  <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', font: `400 12px ${font.sans}`, color: C.inkSoft, padding: '3px 0' }}>
+                    <span>${Number(w.amount).toFixed(2)}</span>
+                    <span style={{ color: w.status === 'paid' ? C.green : w.status === 'failed' ? '#8a2a2a' : C.muted }}>{w.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 10 }}>
               Upcoming <span style={{ color: C.muted, font: `400 12px ${font.sans}` }}>· {adminCookDetail.upcoming.length} active</span>

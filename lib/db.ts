@@ -113,6 +113,27 @@ async function runMigrations(): Promise<void> {
     await sql`ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS side_choice TEXT`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS side_choice TEXT`;
 
+    // Escrow model: buyer payments land in the platform's Stripe account;
+    // the cook's share is a balance in Plates until they withdraw it.
+    // - tip_amount: the buyer's tip, recorded on the first order row of the
+    //   checkout (matching how it was charged); credited to the cook.
+    // - escrowed: true for orders charged under the escrow model. Older
+    //   orders were paid straight through to cooks by Stripe at charge time,
+    //   so they must never count toward a withdrawable balance.
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tip_amount DECIMAL(10, 2)`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS escrowed BOOLEAN DEFAULT false`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS cook_withdrawals (
+        id SERIAL PRIMARY KEY,
+        cook_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount DECIMAL(10, 2) NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing' CHECK (status IN ('processing', 'paid', 'failed')),
+        stripe_transfer_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_withdrawals_cook ON cook_withdrawals(cook_id, created_at DESC)`;
+
     await sql`
       CREATE TABLE IF NOT EXISTS dish_likes (
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -979,6 +1000,82 @@ export async function getCookEarnings(sellerId: number) {
     recent: recent.rows,
   };
 }
+// ============= COOK BALANCE & WITHDRAWALS (escrow) =============
+// Buyer payments stay in the platform's Stripe account. Each escrowed order
+// carries the cook's share (cook_earnings + tip); that share is "pending"
+// while the order is active and becomes "available" once picked up. Available
+// minus everything already withdrawn (or reserved for an in-flight
+// withdrawal) is what the Withdraw Funds button can move.
+
+export async function getCookBalance(cookId: number) {
+  const earned = await sql`
+    SELECT
+      COALESCE(SUM(CASE WHEN o.status = 'picked_up' THEN o.cook_earnings + COALESCE(o.tip_amount, 0) END), 0) AS released,
+      COALESCE(SUM(CASE WHEN o.status NOT IN ('picked_up', 'cancelled') THEN o.cook_earnings + COALESCE(o.tip_amount, 0) END), 0) AS pending
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE d.seller_id = ${cookId} AND o.escrowed = true
+  `;
+  const withdrawn = await sql`
+    SELECT COALESCE(SUM(amount), 0) AS total
+    FROM cook_withdrawals
+    WHERE cook_id = ${cookId} AND status IN ('processing', 'paid')
+  `;
+  const released = Number(earned.rows[0].released);
+  const pending = Number(earned.rows[0].pending);
+  const withdrawnTotal = Number(withdrawn.rows[0].total);
+  return {
+    available: Math.max(0, Math.round((released - withdrawnTotal) * 100) / 100),
+    pending: Math.round(pending * 100) / 100,
+    withdrawn: Math.round(withdrawnTotal * 100) / 100,
+  };
+}
+
+export async function getCookWithdrawals(cookId: number, limit: number = 10) {
+  const result = await sql`
+    SELECT id, amount, status, stripe_transfer_id, created_at
+    FROM cook_withdrawals
+    WHERE cook_id = ${cookId}
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `;
+  return result.rows;
+}
+
+// Atomically reserve a withdrawal: the row is only inserted if the amount
+// still fits inside (released - already reserved/paid), all computed inside
+// one statement — a double-tap can't reserve the same dollars twice.
+export async function reserveWithdrawal(cookId: number, amount: number) {
+  const result = await sql`
+    INSERT INTO cook_withdrawals (cook_id, amount, status)
+    SELECT ${cookId}, ${amount}, 'processing'
+    WHERE ${amount} > 0 AND ${amount} <= (
+      COALESCE((
+        SELECT SUM(o.cook_earnings + COALESCE(o.tip_amount, 0))
+        FROM orders o JOIN dishes d ON o.dish_id = d.id
+        WHERE d.seller_id = ${cookId} AND o.escrowed = true AND o.status = 'picked_up'
+      ), 0)
+      -
+      COALESCE((
+        SELECT SUM(w.amount) FROM cook_withdrawals w
+        WHERE w.cook_id = ${cookId} AND w.status IN ('processing', 'paid')
+      ), 0)
+    )
+    RETURNING *
+  `;
+  return result.rows[0] || null;
+}
+
+export async function settleWithdrawal(id: number, status: 'paid' | 'failed', stripeTransferId: string | null) {
+  const result = await sql`
+    UPDATE cook_withdrawals
+    SET status = ${status}, stripe_transfer_id = ${stripeTransferId}
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
 export async function addToCart(buyerId: number, dishId: number, quantity: number, sideChoice: string | null = null) {
   const result = await sql`
     INSERT INTO cart_items (buyer_id, dish_id, quantity, side_choice)
@@ -1025,21 +1122,26 @@ export async function checkoutCart(
   let total = 0;
   // Single-cook carts: one payment intent covers the order. Store it on each row.
   const primaryIntentId = paymentIntentIds[0] || null;
+  let first = true;
   for (const item of items) {
     const linePrice = Number(item.price) * item.quantity;
     total += linePrice;
     const pickupCode = String(Math.floor(1000 + Math.random() * 9000));
-    // Record the platform/cook split at order time, matching the
-    // application_fee_amount Stripe actually deducts at checkout. Without
-    // this, every earnings/financials view has nothing to sum.
+    // Record the platform/cook split at order time. Under the escrow model
+    // the whole charge lands in the platform's Stripe account; these stored
+    // numbers ARE the ledger that backs cook balances and withdrawals.
     const platformFee = Math.round(linePrice * PLATES_FEE_PERCENT * 100) / 100;
     const cookEarnings = Math.round((linePrice - platformFee) * 100) / 100;
+    // The tip was charged once, on the first order's payment — record it
+    // there so the cook's balance credits it exactly once.
+    const tipForRow = first ? Math.round((Number(tipAmount) || 0) * 100) / 100 : 0;
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings, tip_amount, escrowed)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings}, ${tipForRow}, true)
       RETURNING *
     `;
     orders.push(order.rows[0]);
+    first = false;
   }
   await clearCart(buyerId);
   return { orders, total: total + tipAmount + serviceFee, subtotal: total, tip: tipAmount, fee: serviceFee };
@@ -1607,9 +1709,16 @@ export async function getCookPayoutDetail(
     LIMIT ${pastLimit} OFFSET ${pastOffset}
   `;
 
+  const [balance, withdrawals] = await Promise.all([
+    getCookBalance(cookId),
+    getCookWithdrawals(cookId, 10),
+  ]);
+
   return {
     cook,
     summary: summaryResult.rows[0],
+    balance,
+    withdrawals,
     upcoming: upcomingResult.rows,
     past: pastResult.rows,
   };

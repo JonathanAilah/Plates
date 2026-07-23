@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
-import { stripe } from '@/lib/stripe';
 import { requireSessionUser } from '@/lib/auth';
-import { getUser, getCookEarnings } from '@/lib/db';
+import { getUser, getCookEarnings, getCookBalance, getCookWithdrawals } from '@/lib/db';
+
+// Cook earnings + their Plates balance. Under the escrow model the platform
+// holds buyer payments; the numbers here come from Plates' own ledger
+// (orders + withdrawals), not the cook's Stripe connected-account balance.
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
@@ -11,32 +15,13 @@ export async function GET() {
       return NextResponse.json({ error: 'Not an approved seller' }, { status: 403 });
     }
 
-    const earnings = await getCookEarnings(me.id);
+    const [earnings, balance, withdrawals] = await Promise.all([
+      getCookEarnings(me.id),
+      getCookBalance(me.id),
+      getCookWithdrawals(me.id, 10),
+    ]);
 
-    let stripeData: any = { available: 0, pending: 0, payouts: [] };
-    if (user.stripe_account_id) {
-      try {
-        const balance = await stripe.balance.retrieve({}, { stripeAccount: user.stripe_account_id });
-        const available = balance.available.reduce((s, b) => s + b.amount, 0) / 100;
-        const pending = balance.pending.reduce((s, b) => s + b.amount, 0) / 100;
-        const payouts = await stripe.payouts.list({ limit: 10 }, { stripeAccount: user.stripe_account_id });
-        stripeData = {
-          available,
-          pending,
-          payouts: payouts.data.map(p => ({
-            id: p.id,
-            amount: p.amount / 100,
-            status: p.status,
-            arrivalDate: p.arrival_date,
-            created: p.created,
-          })),
-        };
-      } catch (e) {
-        console.error('Stripe balance/payout fetch failed:', e);
-      }
-    }
-
-    return NextResponse.json({ earnings, stripe: stripeData });
+    return NextResponse.json({ earnings, balance, withdrawals });
   } catch (error: any) {
     console.error('Earnings route error:', error);
     return NextResponse.json({ error: error?.message || 'Failed' }, { status: error?.status || 500 });
