@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
       if (me.account_disabled) {
         return NextResponse.json({ error: 'Account is disabled' }, { status: 403 });
       }
-      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null);
+      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null, body.isCatering === true);
       return NextResponse.json(dish);
     }
 

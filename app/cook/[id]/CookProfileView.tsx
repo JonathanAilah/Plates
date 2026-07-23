@@ -52,6 +52,19 @@ interface CookProfileData {
     review_count: number;
     created_at: string;
   }>;
+  cateringDishes?: Array<{
+    id: number;
+    name: string;
+    description: string | null;
+    price: string | number;
+    emoji: string;
+    photo_url: string | null;
+    likes: number;
+    is_featured: boolean;
+    avg_rating: number | string | null;
+    review_count: number;
+    created_at: string;
+  }>;
   aggregateRating: { avg: number | null; count: number };
   posts: Array<{
     id: number;
@@ -85,6 +98,7 @@ function memberSince(iso: string): string {
 
 export default function CookProfileView({ profile }: { profile: CookProfileData }) {
   const { cook, dishes, aggregateRating, posts } = profile;
+  const cateringDishes = profile.cateringDishes || [];
   const displayName = cook.kitchen_name || cook.name;
   const kitchenFlags = (cook.kitchen_flags || '').split(',').map(f => f.trim()).filter(Boolean);
 
@@ -207,6 +221,54 @@ export default function CookProfileView({ profile }: { profile: CookProfileData 
             </div>
           )}
         </div>
+
+        {/* Catering menu — order ahead for a scheduled pickup date */}
+        {cateringDishes.length > 0 && (
+          <div style={{ padding: '26px 20px 0' }}>
+            <div style={{ font: `500 16px ${font.serif}`, color: C.ink, marginBottom: 4 }}>
+              Catering menu
+              <span style={{ color: C.muted, font: `400 12px ${font.sans}`, marginLeft: 8 }}>· {cateringDishes.length} item{cateringDishes.length === 1 ? '' : 's'}</span>
+            </div>
+            <div style={{ font: `400 12px/1.4 ${font.sans}`, color: C.muted, marginBottom: 10 }}>
+              Order ahead — you&apos;ll pick your pickup date at checkout.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {cateringDishes.map(dish => (
+                <Link
+                  key={dish.id}
+                  href={`/?dish=${dish.id}`}
+                  style={{ background: C.card, borderRadius: 14, padding: 11, display: 'flex', gap: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textDecoration: 'none', color: 'inherit', position: 'relative' }}
+                >
+                  <div style={{ width: 84, height: 84, borderRadius: 11, overflow: 'hidden', flex: 'none' }}>
+                    {dish.photo_url ? (
+                      <div style={{ width: '100%', height: '100%', backgroundImage: `url(${dish.photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+                    ) : (
+                      <div style={{ width: '100%', height: '100%', background: 'repeating-linear-gradient(45deg,#ece3d5,#ece3d5 9px,#f2ebde 9px,#f2ebde 18px)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34 }}>{dish.emoji}</div>
+                    )}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ font: `500 15px/1.15 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                      <div style={{ font: `500 15px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                    </div>
+                    {dish.description && (
+                      <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{dish.description}</div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, flexWrap: 'wrap' }}>
+                      {dish.review_count > 0 && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, font: `500 10.5px ${font.sans}`, color: C.ink }}>
+                          <Star size={10} fill={C.gold} color={C.gold} /> {Number(dish.avg_rating || 0).toFixed(1)} <span style={{ color: C.muted, fontWeight: 400 }}>({dish.review_count})</span>
+                        </span>
+                      )}
+                      <span style={{ background: C.greenLight, color: C.green, padding: '3px 8px', borderRadius: 7, font: `500 10.5px ${font.sans}` }}>Schedule ahead</span>
+                    </div>
+                  </div>
+                  <div style={{ position: 'absolute', top: 8, left: 8, background: C.green, color: '#fff', padding: '2px 7px', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.03em' }}>CATERING</div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Recent posts */}
         {posts.length > 0 && (
