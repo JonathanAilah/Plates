@@ -6108,7 +6108,7 @@ export default function Home() {
 
             {adminCooksUnattributed && Number(adminCooksUnattributed.order_count) > 0 && (
               <div style={{ background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 12, padding: 12, marginBottom: 12, font: `400 12px/1.5 ${font.sans}`, color: '#7a5c0b' }}>
-                ${Number(adminCooksUnattributed.cook_earnings).toFixed(2)} across {adminCooksUnattributed.order_count} order{Number(adminCooksUnattributed.order_count) === 1 ? '' : 's'} can&apos;t be attributed to a cook — the dish was deleted before seller tracking existed. Included in the Financials totals but not in any cook&apos;s row below.
+                ${Number(adminCooksUnattributed.cook_earnings).toFixed(2)} across {adminCooksUnattributed.order_count} order{Number(adminCooksUnattributed.order_count) === 1 ? '' : 's'} belongs to deleted cooks or pre-tracking orders — included in the Financials totals but not in any cook&apos;s row below.
               </div>
             )}
 
