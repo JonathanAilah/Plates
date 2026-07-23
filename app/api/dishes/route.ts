@@ -26,7 +26,18 @@ export async function GET(request: NextRequest) {
     // request after a cold start (memoized — a no-op once the instance is warm).
     if (action === 'getAll') {
       await initializeDatabase();
-      const dishes = await getDishes();
+      const num = (v: string | null): number | null => {
+        if (v == null) return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      const dishes = await getDishes({
+        lat: num(searchParams.get('lat')),
+        lng: num(searchParams.get('lng')),
+        radiusMiles: num(searchParams.get('radiusMi')),
+        limit: num(searchParams.get('limit')),
+        offset: num(searchParams.get('offset')) ?? 0,
+      });
       return NextResponse.json(dishes);
     }
 

@@ -266,6 +266,11 @@ function etaMinutes(miles: number): number {
   return Math.max(10, Math.round(15 + miles * 8));
 }
 
+// Discover feed: how many dishes to load per page, and the default radius (mi)
+// used to fetch only nearby dishes once the viewer's location is known.
+const DISH_PAGE_SIZE = 24;
+const NEARBY_RADIUS_MI = 10;
+
 async function uploadImage(file: File): Promise<string | null> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -326,6 +331,9 @@ export default function Home() {
   const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
+  const [dishOffset, setDishOffset] = useState(0);
+  const [dishHasMore, setDishHasMore] = useState(false);
+  const [loadingMoreDishes, setLoadingMoreDishes] = useState(false);
   const [orders, setOrders] = useState<BuyerOrder[]>([]);
   const [cookOrders, setCookOrders] = useState<CookOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<BuyerOrder | null>(null);
@@ -336,6 +344,51 @@ export default function Home() {
   const [myDishes, setMyDishes] = useState<Dish[]>([]);
   const [loading, setLoading] = useState(true);
   const { isSignedIn, isLoaded } = useAuth();
+
+  // The viewer's location for the dish feed, or null if unknown (anonymous or
+  // location not yet granted). When null, the feed falls back to newest-first.
+  const currentDishLoc = (): { lat: number; lng: number } | null =>
+    user && user.latitude != null && user.longitude != null
+      ? { lat: user.latitude, lng: user.longitude }
+      : null;
+
+  // Fetch one page of the dish feed. `replace` starts a fresh list (offset 0);
+  // otherwise the page is appended. Keeps the query bounded (radius + limit)
+  // instead of loading every dish in the marketplace.
+  const loadDishesPage = async (
+    offset: number,
+    replace: boolean,
+    loc: { lat: number; lng: number } | null
+  ): Promise<Dish[]> => {
+    const params = new URLSearchParams();
+    params.set('action', 'getAll');
+    params.set('limit', String(DISH_PAGE_SIZE));
+    params.set('offset', String(offset));
+    if (loc) {
+      params.set('lat', String(loc.lat));
+      params.set('lng', String(loc.lng));
+      params.set('radiusMi', String(NEARBY_RADIUS_MI));
+    }
+    const res = await fetch(`/api/dishes?${params.toString()}`);
+    const data = res.ok ? await res.json() : [];
+    const arr: Dish[] = Array.isArray(data) ? data : [];
+    setDishes(prev => (replace ? arr : [...prev, ...arr]));
+    setDishHasMore(arr.length === DISH_PAGE_SIZE);
+    setDishOffset(offset + arr.length);
+    return arr;
+  };
+
+  const loadMoreDishes = async () => {
+    if (loadingMoreDishes) return;
+    setLoadingMoreDishes(true);
+    try {
+      await loadDishesPage(dishOffset, false, currentDishLoc());
+    } catch (e) {
+      console.error('Load more dishes error:', e);
+    } finally {
+      setLoadingMoreDishes(false);
+    }
+  };
 
   useEffect(() => {
     // Clerk finished loading and reports signed out, but the app still
@@ -818,11 +871,7 @@ export default function Home() {
       setDismissedRatings(prev => [...prev, pendingRating.order_id]);
       setPendingRating(null);
       // Refresh dishes so aggregate rating updates
-      const dishRes = await fetch('/api/dishes?action=getAll');
-      if (dishRes.ok) {
-        const dishData = await dishRes.json();
-        setDishes(Array.isArray(dishData) ? dishData : []);
-      }
+      await loadDishesPage(0, true, currentDishLoc());
     } catch (e) {
       console.error('Rating submit error:', e);
       showToast('Network error');
@@ -1128,12 +1177,17 @@ export default function Home() {
         // parallel. The dishes route migrates the schema on first hit, so no
         // separate blocking init call is needed on boot.
         const [dishRes, meRes] = await Promise.all([
-          fetch('/api/dishes?action=getAll'),
+          fetch(`/api/dishes?action=getAll&limit=${DISH_PAGE_SIZE}&offset=0`),
           fetch('/api/users'),
         ]);
 
+        // First page loads newest-first (no location yet). Once the user's
+        // location is known, an effect below reloads this filtered to nearby.
         const dishData = await dishRes.json();
-        setDishes(Array.isArray(dishData) ? dishData : []);
+        const dishArr: Dish[] = Array.isArray(dishData) ? dishData : [];
+        setDishes(dishArr);
+        setDishHasMore(dishArr.length === DISH_PAGE_SIZE);
+        setDishOffset(dishArr.length);
 
         const currentUser: User | null = meRes.ok ? await meRes.json() : null;
 
@@ -1176,6 +1230,15 @@ export default function Home() {
     };
     initApp();
   }, []);
+
+  // Once the viewer's location is known (or changes), reload the dish feed
+  // filtered to cooks within NEARBY_RADIUS_MI. Keeps the query bounded instead
+  // of fetching every dish in the marketplace.
+  useEffect(() => {
+    if (user?.latitude == null || user?.longitude == null) return;
+    loadDishesPage(0, true, { lat: user.latitude, lng: user.longitude });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.latitude, user?.longitude]);
 
   useEffect(() => {
     if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
@@ -2163,6 +2226,18 @@ export default function Home() {
             </div>
           )}
 
+          {feedView === 'list' && dishHasMore && (
+            <div style={{ padding: '4px 20px 8px' }}>
+              <button
+                onClick={loadMoreDishes}
+                disabled={loadingMoreDishes}
+                style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+              >
+                {loadingMoreDishes ? 'Loading…' : 'Load more dishes'}
+              </button>
+            </div>
+          )}
+
           <div style={{ padding: '24px 20px 12px', textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}` }}>
             Sign in to order, save favorites, and become a cook.
           </div>
@@ -2547,6 +2622,18 @@ export default function Home() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {feedView === 'list' && !isFiltering && dishHasMore && (
+                <div style={{ padding: '4px 20px 8px' }}>
+                  <button
+                    onClick={loadMoreDishes}
+                    disabled={loadingMoreDishes}
+                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                  >
+                    {loadingMoreDishes ? 'Loading…' : 'Load more dishes'}
+                  </button>
                 </div>
               )}
 
