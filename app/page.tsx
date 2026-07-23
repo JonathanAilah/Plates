@@ -240,8 +240,10 @@ interface User {
   avatar: string;
   bio: string;
   photo_url: string | null;
-  latitude: number | null;
+  latitude: number | null;          // live location, refreshed each visit
   longitude: number | null;
+  kitchen_latitude?: number | null; // pickup spot, from the prep address
+  kitchen_longitude?: number | null;
   prep_address: string | null;
   legal_name: string | null;
   kitchen_name: string | null;
@@ -1555,25 +1557,29 @@ export default function Home() {
           // Kick off the unreviewed-orders prompt (only if the user has completed orders waiting)
           setTimeout(() => { checkForUnreviewedOrders(); }, 800);
 
-          // Ask for location if we don't already have one
-          if (currentUser.latitude == null && navigator.geolocation) {
+          // Refresh the user's CURRENT location on every app open. This used
+          // to run only when latitude was null — but the cook-onboarding flow
+          // wrote the kitchen address into the same columns, so the location
+          // froze at the kitchen forever and the app never asked again.
+          // Kitchen coordinates now live in their own columns; these are the
+          // live ones (blue dot, distances, nearby radius).
+          if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
               async (pos) => {
                 const { latitude, longitude } = pos.coords;
+                // Apply locally right away so the blue dot and distances are
+                // correct without waiting on the server round-trip.
+                setUser(prev => (prev ? { ...prev, latitude, longitude } : prev));
                 try {
-                  const res = await fetch('/api/users', {
+                  await fetch('/api/users', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'updateLocation', latitude, longitude }),
                   });
-                  if (res.ok) {
-                    const updated = await res.json();
-                    setUser(updated);
-                  }
                 } catch (e) { console.error(e); }
               },
-              () => { },
-              { timeout: 8000 }
+              () => { /* denied or unavailable — keep last known */ },
+              { timeout: 8000, maximumAge: 120000 }
             );
           }
 
@@ -2159,8 +2165,9 @@ export default function Home() {
         seller_name: user.name,
         seller_avatar: user.avatar,
         seller_photo_url: user.photo_url,
-        seller_latitude: user.latitude,
-        seller_longitude: user.longitude,
+        // Dish pins live at the KITCHEN, not wherever the cook happens to be
+        seller_latitude: user.kitchen_latitude ?? user.latitude,
+        seller_longitude: user.kitchen_longitude ?? user.longitude,
       };
       setMyDishes([...myDishes, fullDish]);
       // Catering items live on the cook's catering page only — never the feed

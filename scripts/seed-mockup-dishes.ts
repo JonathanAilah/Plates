@@ -53,15 +53,15 @@ async function ensureCook(cook: SeedCook): Promise<number> {
     // Update lat/lng in case we changed the offsets
     const lat = BASE_LAT + cook.latOffset;
     const lng = BASE_LNG + cook.lngOffset;
-    await sql`UPDATE users SET latitude = ${lat}, longitude = ${lng}, kitchen_name = ${cook.kitchenName} WHERE id = ${existing[0].id}`;
+    await sql`UPDATE users SET latitude = ${lat}, longitude = ${lng}, kitchen_latitude = ${lat}, kitchen_longitude = ${lng}, kitchen_name = ${cook.kitchenName} WHERE id = ${existing[0].id}`;
     return existing[0].id;
   }
 
   const lat = BASE_LAT + cook.latOffset;
   const lng = BASE_LNG + cook.lngOffset;
   const created = await sql`
-    INSERT INTO users (name, email, avatar, bio, is_seller, kitchen_name, cottage_food_attested, latitude, longitude)
-    VALUES (${cook.cookName}, ${cook.email}, ${cook.avatar}, ${cook.bio}, true, ${cook.kitchenName}, true, ${lat}, ${lng})
+    INSERT INTO users (name, email, avatar, bio, is_seller, kitchen_name, cottage_food_attested, latitude, longitude, kitchen_latitude, kitchen_longitude)
+    VALUES (${cook.cookName}, ${cook.email}, ${cook.avatar}, ${cook.bio}, true, ${cook.kitchenName}, true, ${lat}, ${lng}, ${lat}, ${lng})
     RETURNING id
   `;
   return created[0].id;

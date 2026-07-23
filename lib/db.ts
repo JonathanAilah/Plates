@@ -44,6 +44,17 @@ async function runMigrations(): Promise<void> {
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS permit_number TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_flags TEXT`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_environment TEXT`;
+    // Kitchen coordinates (geocoded from the prep address) are separate from
+    // latitude/longitude, which is the user's LIVE location refreshed each
+    // visit. They used to share one pair of columns, so a cook's blue dot was
+    // pinned to their kitchen forever. Backfill: any seller with a prep
+    // address had their kitchen coords stored in latitude/longitude.
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_latitude DOUBLE PRECISION`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_longitude DOUBLE PRECISION`;
+    await sql`
+      UPDATE users SET kitchen_latitude = latitude, kitchen_longitude = longitude
+      WHERE prep_address IS NOT NULL AND kitchen_latitude IS NULL AND latitude IS NOT NULL
+    `;
     // Cook-defined pickup time bounds (in minutes). Buyers choose within [min, max].
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_min_minutes INTEGER`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS pickup_max_minutes INTEGER`;
@@ -385,9 +396,11 @@ export async function updateUserLocation(id: number, latitude: number, longitude
   return result.rows[0];
 }
 
+// The prep address sets the KITCHEN coordinates — where pickups happen —
+// never the user's live location.
 export async function updateUserAddress(id: number, address: string, latitude: number, longitude: number) {
   const result = await sql`
-    UPDATE users SET prep_address = ${address}, latitude = ${latitude}, longitude = ${longitude}
+    UPDATE users SET prep_address = ${address}, kitchen_latitude = ${latitude}, kitchen_longitude = ${longitude}
     WHERE id = ${id} RETURNING *
   `;
   return result.rows[0];
@@ -500,8 +513,8 @@ export async function getDishes(opts: GetDishesOptions = {}) {
   // [-1, 1] to avoid NaN from floating-point rounding on near-identical points.
   const distanceExpr = `
     3959 * acos(GREATEST(-1, LEAST(1,
-      cos(radians($1)) * cos(radians(u.latitude)) * cos(radians(u.longitude) - radians($2))
-      + sin(radians($1)) * sin(radians(u.latitude))
+      cos(radians($1)) * cos(radians(COALESCE(u.kitchen_latitude, u.latitude))) * cos(radians(COALESCE(u.kitchen_longitude, u.longitude)) - radians($2))
+      + sin(radians($1)) * sin(radians(COALESCE(u.kitchen_latitude, u.latitude)))
     )))`;
 
   const params: unknown[] = [];
@@ -511,7 +524,8 @@ export async function getDishes(opts: GetDishesOptions = {}) {
     params.push(lat, lng, radiusMiles); // $1, $2, $3
     distanceSelect = distanceExpr;
     locFilter = `
-      AND u.latitude IS NOT NULL AND u.longitude IS NOT NULL
+      AND COALESCE(u.kitchen_latitude, u.latitude) IS NOT NULL
+      AND COALESCE(u.kitchen_longitude, u.longitude) IS NOT NULL
       AND (${distanceExpr}) <= $3`;
   }
 
@@ -524,7 +538,8 @@ export async function getDishes(opts: GetDishesOptions = {}) {
 
   let text = `
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
-           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           COALESCE(u.kitchen_latitude, u.latitude) as seller_latitude,
+           COALESCE(u.kitchen_longitude, u.longitude) as seller_longitude,
            u.kitchen_flags as seller_kitchen_flags,
            u.kitchen_environment as seller_kitchen_environment,
            u.pickup_description as seller_pickup_description,
@@ -578,7 +593,8 @@ export async function getDish(id: number) {
   const result = await sql`
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.id as seller_id,
            u.photo_url as seller_photo_url,
-           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           COALESCE(u.kitchen_latitude, u.latitude) as seller_latitude,
+           COALESCE(u.kitchen_longitude, u.longitude) as seller_longitude,
            u.kitchen_flags as seller_kitchen_flags,
            u.kitchen_environment as seller_kitchen_environment,
            u.pickup_description as seller_pickup_description,
@@ -677,7 +693,8 @@ export async function getOrders(buyerId: number) {
            u.id as seller_id, COALESCE(u.name, 'Deleted cook') as seller_name,
            COALESCE(u.avatar, '?') as seller_avatar,
            u.photo_url as seller_photo_url,
-           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           COALESCE(u.kitchen_latitude, u.latitude) as seller_latitude,
+           COALESCE(u.kitchen_longitude, u.longitude) as seller_longitude,
            u.prep_address as seller_address,
            u.kitchen_name as seller_kitchen_name,
            u.cooking_hours as seller_cooking_hours,
@@ -955,7 +972,8 @@ export async function getCart(buyerId: number) {
     SELECT c.id as cart_item_id, c.quantity, c.side_choice, d.*,
            u.id as seller_id,
            u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
-           u.latitude as seller_latitude, u.longitude as seller_longitude,
+           COALESCE(u.kitchen_latitude, u.latitude) as seller_latitude,
+           COALESCE(u.kitchen_longitude, u.longitude) as seller_longitude,
            u.pickup_min_minutes as seller_pickup_min_minutes,
            u.pickup_max_minutes as seller_pickup_max_minutes
     FROM cart_items c
@@ -2110,7 +2128,9 @@ export async function getCookPublicProfile(userId: number) {
   const userResult = await sql`
     SELECT id, name, avatar, photo_url, bio,
            kitchen_name, pickup_description, kitchen_flags,
-           latitude, longitude, prep_address,
+           COALESCE(kitchen_latitude, latitude) as latitude,
+           COALESCE(kitchen_longitude, longitude) as longitude,
+           prep_address,
            seller_status, account_disabled,
            created_at
     FROM users WHERE id = ${userId} LIMIT 1
