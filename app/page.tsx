@@ -5406,7 +5406,7 @@ export default function Home() {
 
         {(screen === 'feed') && (
           <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, background: C.card, borderTop: `1px solid ${C.hairline}`, display: 'flex', justifyContent: 'space-around', padding: '10px 0 14px', maxWidth: 430, margin: '0 auto' }}>
-            <button onClick={() => setScreen('feed')} style={{ textAlign: 'center', color: C.terracotta, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <button onClick={() => { setScreen('feed'); setHomeTab('discover'); }} style={{ textAlign: 'center', color: homeTab === 'discover' ? C.terracotta : C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
               <Compass size={22} strokeWidth={2.5} />
               <span style={{ font: `500 10px ${font.sans}` }}>Discover</span>
             </button>
@@ -5417,10 +5417,19 @@ export default function Home() {
               )}
               <span style={{ font: `500 10px ${font.sans}` }}>Cart</span>
             </button>
-            <button onClick={() => setScreen('seller-dashboard')} style={{ textAlign: 'center', color: C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-              <ChefHat size={22} />
-              <span style={{ font: `500 10px ${font.sans}` }}>Cook</span>
-            </button>
+            {user.is_seller ? (
+              // Sellers (seller mode on) get their kitchen
+              <button onClick={() => setScreen('seller-dashboard')} style={{ textAlign: 'center', color: C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <ChefHat size={22} />
+                <span style={{ font: `500 10px ${font.sans}` }}>Cook</span>
+              </button>
+            ) : (
+              // Buyers get the community feed instead
+              <button onClick={() => { setScreen('feed'); setHomeTab('feed'); }} style={{ textAlign: 'center', color: homeTab === 'feed' ? C.terracotta : C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <MessageCircle size={22} />
+                <span style={{ font: `500 10px ${font.sans}` }}>Feed</span>
+              </button>
+            )}
             <button onClick={() => setScreen('profile')} style={{ textAlign: 'center', color: C.mutedLight, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
               <UserIcon size={22} />
               <span style={{ font: `500 10px ${font.sans}` }}>You</span>
