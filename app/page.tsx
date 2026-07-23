@@ -3,10 +3,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
-import MapView from '@/components/MapView';
-import AddressAutocomplete from '@/components/AddressAutocomplete';
+import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
-import CheckoutPayment from '@/components/CheckoutPayment';
+
+// Heavy, screen-specific components (Leaflet map, Stripe checkout, address
+// autocomplete) are code-split out of the initial bundle and loaded on demand.
+const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
+const AddressAutocomplete = dynamic(() => import('@/components/AddressAutocomplete'), { ssr: false });
+const CheckoutPayment = dynamic(() => import('@/components/CheckoutPayment'), { ssr: false });
 
 interface Dish {
   id: number;
