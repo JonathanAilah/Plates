@@ -101,7 +101,7 @@ async function seed() {
       console.log('  backfilling photo for: ' + cook.dishName);
       try {
         const img = await generateFoodImage(cook.dishName);
-        await sql`UPDATE dishes SET photo_url = ${img.dataUrl} WHERE id = ${existingDish[0].id}`;
+        await sql`UPDATE dishes SET photo_url = ${img.url} WHERE id = ${existingDish[0].id}`;
         console.log('    image generated (~' + Math.round(img.bytes / 1024) + 'KB)');
         backfilled++;
       } catch (err) {
@@ -115,7 +115,7 @@ async function seed() {
     let photoDataUrl: string | null = null;
     try {
       const img = await generateFoodImage(cook.dishName);
-      photoDataUrl = img.dataUrl;
+      photoDataUrl = img.url;
       console.log('    image generated (~' + Math.round(img.bytes / 1024) + 'KB)');
     } catch (err) {
       console.error('    image failed: ' + (err instanceof Error ? err.message : err));
