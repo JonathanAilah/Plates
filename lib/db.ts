@@ -345,8 +345,47 @@ export async function createDish(sellerId: number, name: string, description: st
   return result.rows[0];
 }
 
-export async function getDishes() {
-  const result = await sql`
+export interface GetDishesOptions {
+  // When lat/lng/radiusMiles are all provided, only dishes from cooks within
+  // that radius are returned. Otherwise all approved dishes are returned.
+  lat?: number | null;
+  lng?: number | null;
+  radiusMiles?: number | null;
+  // Pagination. limit null = no limit (legacy behavior); offset defaults to 0.
+  limit?: number | null;
+  offset?: number | null;
+}
+
+export async function getDishes(opts: GetDishesOptions = {}) {
+  const lat = opts.lat ?? null;
+  const lng = opts.lng ?? null;
+  const radiusMiles = opts.radiusMiles ?? null;
+  const limit = opts.limit ?? null;
+  const offset = opts.offset ?? 0;
+
+  const hasLoc =
+    Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(radiusMiles);
+
+  // Great-circle distance in miles. GREATEST/LEAST clamp the acos argument to
+  // [-1, 1] to avoid NaN from floating-point rounding on near-identical points.
+  const distanceExpr = `
+    3959 * acos(GREATEST(-1, LEAST(1,
+      cos(radians($1)) * cos(radians(u.latitude)) * cos(radians(u.longitude) - radians($2))
+      + sin(radians($1)) * sin(radians(u.latitude))
+    )))`;
+
+  const params: unknown[] = [];
+  let distanceSelect = 'NULL::double precision';
+  let locFilter = '';
+  if (hasLoc) {
+    params.push(lat, lng, radiusMiles); // $1, $2, $3
+    distanceSelect = distanceExpr;
+    locFilter = `
+      AND u.latitude IS NOT NULL AND u.longitude IS NOT NULL
+      AND (${distanceExpr}) <= $3`;
+  }
+
+  let text = `
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
            u.kitchen_flags as seller_kitchen_flags,
@@ -356,7 +395,8 @@ export async function getDishes() {
            u.pickup_min_minutes as seller_pickup_min_minutes,
            u.pickup_max_minutes as seller_pickup_max_minutes,
            COALESCE(r.avg_rating, 0) as avg_rating,
-           COALESCE(r.review_count, 0)::int as review_count
+           COALESCE(r.review_count, 0)::int as review_count,
+           (${distanceSelect}) as distance_miles
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
     LEFT JOIN (
@@ -365,8 +405,19 @@ export async function getDishes() {
     ) r ON r.dish_id = d.id
     WHERE u.seller_status = 'approved'
       AND u.account_disabled = false
-    ORDER BY d.created_at DESC
-  `;
+      ${locFilter}
+    ORDER BY d.created_at DESC`;
+
+  if (limit != null && Number.isFinite(limit)) {
+    params.push(limit);
+    text += ` LIMIT $${params.length}`;
+  }
+  if (offset && Number.isFinite(offset)) {
+    params.push(offset);
+    text += ` OFFSET $${params.length}`;
+  }
+
+  const result = await sql.query(text, params);
   return result.rows;
 }
 
