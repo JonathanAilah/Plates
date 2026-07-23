@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
         lat: num(searchParams.get('lat')),
         lng: num(searchParams.get('lng')),
         radiusMiles: num(searchParams.get('radiusMi')),
+        search: searchParams.get('search'),
         limit: num(searchParams.get('limit')),
         offset: num(searchParams.get('offset')) ?? 0,
       });

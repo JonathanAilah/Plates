@@ -336,6 +336,11 @@ export default function Home() {
   const [loadingMoreDishes, setLoadingMoreDishes] = useState(false);
   const [nearbyRadiusMi, setNearbyRadiusMi] = useState<number>(NEARBY_RADIUS_MI);
   const [showNearbyPanel, setShowNearbyPanel] = useState(false);
+  // Server-side search results (whole catalog), separate from the nearby feed.
+  const [searchResults, setSearchResults] = useState<Dish[]>([]);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [orders, setOrders] = useState<BuyerOrder[]>([]);
   const [cookOrders, setCookOrders] = useState<CookOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<BuyerOrder | null>(null);
@@ -389,6 +394,35 @@ export default function Home() {
       console.error('Load more dishes error:', e);
     } finally {
       setLoadingMoreDishes(false);
+    }
+  };
+
+  // Server-side search across the whole catalog (not just loaded pages). Runs
+  // without a radius so matches anywhere are found; distance is still shown
+  // client-side from the seller's coordinates. Paginated like the feed.
+  const runSearch = async (query: string, offset: number, replace: boolean): Promise<void> => {
+    const params = new URLSearchParams();
+    params.set('action', 'getAll');
+    params.set('search', query);
+    params.set('limit', String(DISH_PAGE_SIZE));
+    params.set('offset', String(offset));
+    const res = await fetch(`/api/dishes?${params.toString()}`);
+    const data = res.ok ? await res.json() : [];
+    const arr: Dish[] = Array.isArray(data) ? data : [];
+    setSearchResults(prev => (replace ? arr : [...prev, ...arr]));
+    setSearchHasMore(arr.length === DISH_PAGE_SIZE);
+    setSearchOffset(offset + arr.length);
+  };
+
+  const loadMoreSearch = async () => {
+    if (searchLoading) return;
+    setSearchLoading(true);
+    try {
+      await runSearch(searchQuery.trim(), searchOffset, false);
+    } catch (e) {
+      console.error('Load more search error:', e);
+    } finally {
+      setSearchLoading(false);
     }
   };
 
@@ -1242,6 +1276,24 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.latitude, user?.longitude, nearbyRadiusMi]);
 
+  // Debounced server-side search. Empty query clears results and the feed
+  // falls back to the nearby list.
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearchHasMore(false);
+      setSearchOffset(0);
+      return;
+    }
+    setSearchLoading(true);
+    const t = setTimeout(() => {
+      runSearch(q, 0, true).finally(() => setSearchLoading(false));
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
   useEffect(() => {
     if (screen === 'seller-dashboard' && user?.seller_status === 'approved') {
       loadEarnings();
@@ -1986,13 +2038,10 @@ export default function Home() {
   const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length;
 
   const filteredDishes = React.useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return dishes.filter(d => {
-      if (q) {
-        const nameMatch = d.name.toLowerCase().includes(q);
-        const cookMatch = (d.seller_name || '').toLowerCase().includes(q);
-        if (!nameMatch && !cookMatch) return false;
-      }
+    // When searching, results come from the server (whole catalog); otherwise
+    // refine the nearby feed. Remaining filters apply client-side either way.
+    const source = searchQuery.trim() ? searchResults : dishes;
+    return source.filter(d => {
       if (distanceFilter !== 'any') {
         // If user isn't loaded / has no location, distance filter can't match anything
         if (!user || user.latitude == null || user.longitude == null || d.seller_latitude == null || d.seller_longitude == null) return false;
@@ -2014,7 +2063,7 @@ export default function Home() {
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dishes, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user?.latitude, user?.longitude]);
+  }, [dishes, searchResults, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user?.latitude, user?.longitude]);
 
   const isFiltering = searchQuery.trim().length > 0 || activeFilterCount > 0;
 
@@ -2630,7 +2679,18 @@ export default function Home() {
                 </div>
               )}
 
-              {feedView === 'list' && !isFiltering && dishHasMore && (
+              {feedView === 'list' && searchQuery.trim() && searchHasMore && (
+                <div style={{ padding: '4px 20px 8px' }}>
+                  <button
+                    onClick={loadMoreSearch}
+                    disabled={searchLoading}
+                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                  >
+                    {searchLoading ? 'Loading…' : 'Load more results'}
+                  </button>
+                </div>
+              )}
+              {feedView === 'list' && !searchQuery.trim() && activeFilterCount === 0 && dishHasMore && (
                 <div style={{ padding: '4px 20px 8px' }}>
                   <button
                     onClick={loadMoreDishes}

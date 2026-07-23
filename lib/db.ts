@@ -351,6 +351,9 @@ export interface GetDishesOptions {
   lat?: number | null;
   lng?: number | null;
   radiusMiles?: number | null;
+  // Free-text search across dish name and cook name/kitchen. When set, matching
+  // happens in SQL across the whole catalog (not just a loaded page).
+  search?: string | null;
   // Pagination. limit null = no limit (legacy behavior); offset defaults to 0.
   limit?: number | null;
   offset?: number | null;
@@ -360,6 +363,7 @@ export async function getDishes(opts: GetDishesOptions = {}) {
   const lat = opts.lat ?? null;
   const lng = opts.lng ?? null;
   const radiusMiles = opts.radiusMiles ?? null;
+  const search = (opts.search ?? '').trim();
   const limit = opts.limit ?? null;
   const offset = opts.offset ?? 0;
 
@@ -385,6 +389,13 @@ export async function getDishes(opts: GetDishesOptions = {}) {
       AND (${distanceExpr}) <= $3`;
   }
 
+  let searchClause = '';
+  if (search) {
+    params.push(`%${search}%`);
+    const p = `$${params.length}`;
+    searchClause = `AND (d.name ILIKE ${p} OR u.name ILIKE ${p} OR u.kitchen_name ILIKE ${p})`;
+  }
+
   let text = `
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.photo_url as seller_photo_url,
            u.latitude as seller_latitude, u.longitude as seller_longitude,
@@ -406,6 +417,7 @@ export async function getDishes(opts: GetDishesOptions = {}) {
     WHERE u.seller_status = 'approved'
       AND u.account_disabled = false
       ${locFilter}
+      ${searchClause}
     ORDER BY d.created_at DESC`;
 
   if (limit != null && Number.isFinite(limit)) {
