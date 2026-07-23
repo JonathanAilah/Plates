@@ -51,6 +51,9 @@ async function runMigrations(): Promise<void> {
     // address had their kitchen coords stored in latitude/longitude.
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_latitude DOUBLE PRECISION`;
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS kitchen_longitude DOUBLE PRECISION`;
+    // Live-location opt-out. When false, the stored coords are cleared and
+    // updateUserLocation refuses new writes until the user re-shares.
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS location_sharing BOOLEAN DEFAULT true`;
     await sql`
       UPDATE users SET kitchen_latitude = latitude, kitchen_longitude = longitude
       WHERE prep_address IS NOT NULL AND kitchen_latitude IS NULL AND latitude IS NOT NULL
@@ -390,9 +393,25 @@ export async function updateUserSeller(id: number, isSeller: boolean) {
 }
 
 export async function updateUserLocation(id: number, latitude: number, longitude: number) {
+  // No-op when the user has opted out of location sharing — the automatic
+  // per-visit refresh must not silently re-share.
   const result = await sql`
-    UPDATE users SET latitude = ${latitude}, longitude = ${longitude} WHERE id = ${id} RETURNING *
+    UPDATE users SET latitude = ${latitude}, longitude = ${longitude}
+    WHERE id = ${id} AND location_sharing IS DISTINCT FROM false
+    RETURNING *
   `;
+  if (result.rows[0]) return result.rows[0];
+  const unchanged = await sql`SELECT * FROM users WHERE id = ${id} LIMIT 1`;
+  return unchanged.rows[0];
+}
+
+// Toggle live-location sharing. Turning it OFF also erases the stored
+// coordinates; turning it ON just re-arms updateUserLocation (fresh coords
+// arrive from the client's next capture).
+export async function setLocationSharing(id: number, enabled: boolean) {
+  const result = enabled
+    ? await sql`UPDATE users SET location_sharing = true WHERE id = ${id} RETURNING *`
+    : await sql`UPDATE users SET location_sharing = false, latitude = NULL, longitude = NULL WHERE id = ${id} RETURNING *`;
   return result.rows[0];
 }
 

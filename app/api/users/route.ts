@@ -84,6 +84,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(user);
     }
 
+    if (action === 'setLocationSharing') {
+      const { setLocationSharing } = await import('@/lib/db');
+      const user = await setLocationSharing(me.id, body.enabled === true);
+      return NextResponse.json(user);
+    }
+
     if (action === 'acceptTerms') {
       const version = String(body.version || '').trim();
       if (!version) return NextResponse.json({ error: 'version required' }, { status: 400 });
