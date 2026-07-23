@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const result = await generateFoodImage(dish.name);
-        const updated = await updateDishPhoto(dish.id, result.dataUrl);
+        const updated = await updateDishPhoto(dish.id, result.url);
         return NextResponse.json(updated);
       } catch (err) {
         console.error('Image generation failed:', err);
