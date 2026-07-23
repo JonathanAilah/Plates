@@ -150,6 +150,12 @@ async function runMigrations(): Promise<void> {
     //   so they must never count toward a withdrawable balance.
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tip_amount DECIMAL(10, 2)`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS escrowed BOOLEAN DEFAULT false`;
+    // Service fee + tax charged at checkout, recorded on the first order row
+    // of the batch (same pattern as tip_amount — that's the row whose payment
+    // carried the extras). Older orders predate these columns and stay 0, so
+    // admin tax/fee totals only reflect orders placed after this shipped.
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS service_fee DECIMAL(10, 2) DEFAULT 0`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_amount DECIMAL(10, 2) DEFAULT 0`;
     // Snapshot the seller directly on the order. Attribution used to go
     // through dishes (orders -> dishes -> seller), so deleting a dish
     // orphaned its orders: they vanished from order lists, kitchen queues,
@@ -1250,6 +1256,22 @@ export async function checkoutCart(
   let total = 0;
   // Single-cook carts: one payment intent covers the order. Store it on each row.
   const primaryIntentId = paymentIntentIds[0] || null;
+
+  // Recompute the service fee and tax exactly as the Stripe charge did
+  // (cents math on the full cart subtotal) and record them on the first
+  // order row — the client's serviceFee argument is display-only.
+  const settings = await getPlatformSettings();
+  const cartSubtotalCents = items.reduce(
+    (s: number, i: any) =>
+      s + (Math.round(Number(i.price) * 100) + Math.round(sidePriceFor(i.sides, i.side_choice) * 100)) * i.quantity,
+    0,
+  );
+  const serviceFeeAmount = Math.max(
+    Math.round(settings.serviceFeeMin * 100),
+    Math.round(cartSubtotalCents * settings.serviceFeePercent / 100),
+  ) / 100;
+  const taxAmount = Math.round(cartSubtotalCents * settings.taxPercent / 100) / 100;
+
   let first = true;
   for (const item of items) {
     // A chosen side adds its price to every plate in the line
@@ -1265,16 +1287,18 @@ export async function checkoutCart(
     // The tip was charged once, on the first order's payment — record it
     // there so the cook's balance credits it exactly once.
     const tipForRow = first ? Math.round((Number(tipAmount) || 0) * 100) / 100 : 0;
+    const feeForRow = first ? serviceFeeAmount : 0;
+    const taxForRow = first ? taxAmount : 0;
     const order = await sql`
-      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings, tip_amount, escrowed, seller_id)
-      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings}, ${tipForRow}, true, ${item.seller_id})
+      INSERT INTO orders (buyer_id, dish_id, quantity, total_price, status, pickup_code, pickup_at, stripe_payment_intent_id, side_choice, platform_fee, cook_earnings, tip_amount, escrowed, seller_id, service_fee, tax_amount)
+      VALUES (${buyerId}, ${item.id}, ${item.quantity}, ${linePrice}, 'placed', ${pickupCode}, ${pickupAt}, ${primaryIntentId}, ${item.side_choice ?? null}, ${platformFee}, ${cookEarnings}, ${tipForRow}, true, ${item.seller_id}, ${feeForRow}, ${taxForRow})
       RETURNING *
     `;
     orders.push(order.rows[0]);
     first = false;
   }
   await clearCart(buyerId);
-  return { orders, total: total + tipAmount + serviceFee, subtotal: total, tip: tipAmount, fee: serviceFee };
+  return { orders, total: total + tipAmount + serviceFeeAmount + taxAmount, subtotal: total, tip: tipAmount, fee: serviceFeeAmount, tax: taxAmount };
 }
 
 // ============= MESSAGES =============
@@ -1763,6 +1787,37 @@ export interface AdminCookPayoutsListOptions {
   offset?: number;
 }
 
+// Drill-down behind the Platform revenue and Gross sales cards.
+// Revenue = the 15% commission (platform_fee); service fee and tax are shown
+// separately in the gross breakdown since they're recorded per order only for
+// orders placed after those columns shipped.
+export async function getAdminFinanceBreakdown() {
+  const revenue = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS orders_today,
+      COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE))::int AS orders_month,
+      COUNT(*)::int AS orders_all,
+      COALESCE(SUM(platform_fee) FILTER (WHERE created_at >= CURRENT_DATE), 0) AS rev_today,
+      COALESCE(SUM(platform_fee) FILTER (WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)), 0) AS rev_month,
+      COALESCE(SUM(platform_fee) FILTER (WHERE created_at >= DATE_TRUNC('year', CURRENT_DATE)), 0) AS rev_year,
+      COALESCE(SUM(platform_fee), 0) AS rev_all,
+      COALESCE(SUM(service_fee), 0) AS service_fees_all,
+      COALESCE(SUM(tax_amount), 0) AS tax_all
+    FROM orders WHERE status != 'cancelled'
+  `;
+  const gross = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE status != 'cancelled')::int AS order_count,
+      COALESCE(SUM(total_price) FILTER (WHERE status != 'cancelled'), 0) AS gross_sales,
+      COUNT(*) FILTER (WHERE status = 'cancelled')::int AS refund_count,
+      COALESCE(SUM(total_price) FILTER (WHERE status = 'cancelled'), 0) AS refund_total,
+      COALESCE(SUM(tax_amount) FILTER (WHERE status != 'cancelled'), 0) AS tax_collected,
+      COALESCE(SUM(service_fee) FILTER (WHERE status != 'cancelled'), 0) AS service_fees
+    FROM orders
+  `;
+  return { revenue: revenue.rows[0], gross: gross.rows[0] };
+}
+
 export async function getAllCooksForAdminPayouts(opts: AdminCookPayoutsListOptions = {}) {
   const limit = opts.limit ?? 30;
   const offset = opts.offset ?? 0;
@@ -1811,7 +1866,36 @@ export async function getAllCooksForAdminPayouts(opts: AdminCookPayoutsListOptio
            OR NOT EXISTS (SELECT 1 FROM users u WHERE u.id = o.seller_id))
   `;
 
-  return { cooks: result.rows, unattributed: unattributed.rows[0] };
+  // Platform-wide payout summary for the top of the cook payouts screen:
+  // how many cooks have sold, their combined gross, the share owed to them
+  // (earnings + tips), and how that splits into already-withdrawn vs still
+  // sitting in Plates balances.
+  const summary = await sql`
+    SELECT COUNT(DISTINCT o.seller_id)::int AS cook_count,
+           COALESCE(SUM(o.total_price), 0) AS gross_sales,
+           COALESCE(SUM(COALESCE(o.cook_earnings, 0) + COALESCE(o.tip_amount, 0)), 0) AS net_owed
+    FROM orders o
+    WHERE o.status != 'cancelled' AND o.seller_id IS NOT NULL
+  `;
+  const withdrawn = await sql`
+    SELECT COALESCE(SUM(amount - COALESCE(fee, 0)), 0) AS paid_out,
+           COALESCE(SUM(amount), 0) AS withdrawn_total
+    FROM cook_withdrawals
+    WHERE status IN ('processing', 'paid')
+  `;
+  const s = summary.rows[0];
+  const w = withdrawn.rows[0];
+  return {
+    cooks: result.rows,
+    unattributed: unattributed.rows[0],
+    summary: {
+      cook_count: s.cook_count,
+      gross_sales: s.gross_sales,
+      net_owed: s.net_owed,
+      paid_out: w.paid_out,
+      to_be_paid: Math.max(0, Math.round((Number(s.net_owed) - Number(w.withdrawn_total)) * 100) / 100),
+    },
+  };
 }
 
 export async function getCookPayoutDetail(

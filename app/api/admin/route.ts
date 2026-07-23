@@ -24,6 +24,7 @@ import {
   getBugReports,
   setBugReportStatus,
   getUserRoleById,
+  getAdminFinanceBreakdown,
 } from '@/lib/db';
 
 // Staff tiers: chief admins ('admin') see everything; secondary admins see
@@ -47,7 +48,7 @@ export async function GET(request: NextRequest) {
     const moderator = chief || me.role === 'secondary_admin';
     // Financial data is chief-admin only; general moderation data needs at
     // least secondary admin; bug reports are open to all staff (support).
-    const CHIEF_ONLY = ['financials', 'ordersList', 'cooksPayouts', 'cookPayoutDetail'];
+    const CHIEF_ONLY = ['financials', 'financeBreakdown', 'ordersList', 'cooksPayouts', 'cookPayoutDetail'];
     const MODERATOR_ONLY = ['stats', 'pending', 'users', 'userDetail', 'userOrders', 'dishes'];
     if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
     if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
@@ -87,6 +88,11 @@ export async function GET(request: NextRequest) {
     if (action === 'financials') {
         const financials = await getAdminFinancials();
         return NextResponse.json(financials);
+    }
+
+    if (action === 'financeBreakdown') {
+      const breakdown = await getAdminFinanceBreakdown();
+      return NextResponse.json(breakdown);
     }
 
     if (action === 'dishes') {
