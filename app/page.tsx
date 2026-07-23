@@ -5,6 +5,7 @@ import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, 
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
+import MarketingIntro from '@/components/MarketingIntro';
 
 // Heavy, screen-specific components (Leaflet map, Stripe checkout, address
 // autocomplete) are code-split out of the initial bundle and loaded on demand.
@@ -356,7 +357,22 @@ export default function Home() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [myDishes, setMyDishes] = useState<Dish[]>([]);
   const [loading, setLoading] = useState(true);
+  // First-visit marketing intro. Enabled right after hydration when the
+  // visitor has never seen it; dismissed permanently once completed/skipped,
+  // and never shown to signed-in users.
+  const [showIntro, setShowIntro] = useState(false);
   const { isSignedIn, isLoaded } = useAuth();
+
+  useEffect(() => {
+    try {
+      if (!window.localStorage.getItem('plates_intro_seen')) setShowIntro(true);
+    } catch { /* storage unavailable — skip the intro */ }
+  }, []);
+
+  const dismissIntro = () => {
+    try { window.localStorage.setItem('plates_intro_seen', '1'); } catch {}
+    setShowIntro(false);
+  };
 
   // The viewer's location for the dish feed, or null if unknown (anonymous or
   // location not yet granted). When null, the feed falls back to newest-first.
@@ -1283,6 +1299,12 @@ export default function Home() {
         setDishOffset(dishArr.length);
 
         const currentUser: User | null = meRes.ok ? await meRes.json() : null;
+
+        // Signed-in users aren't new — never show them the marketing intro.
+        if (currentUser) {
+          try { window.localStorage.setItem('plates_intro_seen', '1'); } catch {}
+          setShowIntro(false);
+        }
 
         setUser(currentUser);
         if (currentUser) {
@@ -2227,6 +2249,9 @@ export default function Home() {
           <ChefHat size={44} style={{ marginBottom: 14, color: C.terracotta, opacity: .8 }} />
           <p style={{ fontFamily: font.sans, fontSize: 15 }}>Loading…</p>
         </div>
+        {/* First-time visitors see the marketing intro instantly (static, no
+            data needed) while the app boots underneath. */}
+        {showIntro && <MarketingIntro onDone={dismissIntro} />}
       </div>
     );
   }
@@ -2312,6 +2337,8 @@ export default function Home() {
 
     return (
       <div style={{ background: C.page, minHeight: '100vh', fontFamily: font.sans, color: C.ink }}>
+        {/* First-visit marketing intro — overlays the feed until completed/skipped */}
+        {showIntro && <MarketingIntro onDone={dismissIntro} />}
         <div style={{ maxWidth: 430, margin: '0 auto', background: C.surface, minHeight: '100vh', position: 'relative', paddingBottom: 60 }}>
           {/* Header */}
           <div style={{ padding: '20px 20px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
