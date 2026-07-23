@@ -2187,18 +2187,18 @@ export default function Home() {
           <div style={{ padding: '20px 20px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ font: `500 25px/1 ${font.serif}`, color: C.terracotta, letterSpacing: '-.01em' }}>Plates</div>
             <SignInButton mode="modal">
-              <button style={{ background: C.terracotta, color: '#fff', padding: '8px 14px', borderRadius: 20, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button style={{ background: C.terracotta, color: '#fff', padding: '8px 14px', borderRadius: 20, font: `500 13.5px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <LogIn size={14} /> Sign in
               </button>
             </SignInButton>
           </div>
-          <div style={{ padding: '0 20px 10px', font: `400 13px/1.4 ${font.sans}`, color: C.inkSoft }}>
+          <div style={{ padding: '0 20px 10px', font: `400 14.5px/1.4 ${font.sans}`, color: C.inkSoft }}>
             Homemade meals from cooks in your neighborhood. Order online, pick up nearby.
           </div>
           {/* Search bar (display only for anonymous — sign in prompt on interact) */}
           <div style={{ padding: '12px 20px 0' }}>
             <SignInButton mode="modal">
-              <div style={{ cursor: 'pointer', background: '#fff', borderRadius: 14, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 10, color: C.muted, font: `400 13.5px ${font.sans}`, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
+              <div style={{ cursor: 'pointer', background: '#fff', borderRadius: 14, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 10, color: C.muted, font: `400 14.5px ${font.sans}`, boxShadow: '0 2px 10px rgba(60,40,20,.06)' }}>
                 <Search size={15} color={C.terracotta} strokeWidth={2.5} />
                 Search dishes, cooks, cuisines…
               </div>
@@ -2212,14 +2212,14 @@ export default function Home() {
                 <div style={{ cursor: 'pointer', position: 'relative', borderRadius: 22, overflow: 'hidden', boxShadow: '0 8px 22px rgba(60,40,20,.16)' }}>
                   <PhotoTile dish={anonHeroDish} height={224} radius={0} />
                   <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 36%,rgba(30,15,5,.76))' }} />
-                  <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 10px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
+                  <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 11px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
                   <div style={{ position: 'absolute', left: 16, right: 16, bottom: 15, color: '#fff' }}>
                     <div style={{ font: `500 22px/1.08 ${font.serif}` }}>{anonHeroDish.name}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 12.5px ${font.sans}`, opacity: .95 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 13.5px ${font.sans}`, opacity: .95 }}>
                       {anonHeroDish.seller_photo_url ? (
                         <span style={{ width: 23, height: 23, borderRadius: '50%', backgroundImage: `url(${anonHeroDish.seller_photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
                       ) : (
-                        <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}` }}>{anonHeroDish.seller_avatar}</span>
+                        <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 11px ${font.sans}` }}>{anonHeroDish.seller_avatar}</span>
                       )}
                       {anonHeroDish.seller_name}
                       {(anonHeroDish.review_count ?? 0) > 0 && (
@@ -2238,10 +2238,10 @@ export default function Home() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
             <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>Fresh from the block</div>
             <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
-              <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}` }}>
+              <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 12px ${font.sans}` }}>
                 List
               </button>
-              <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}` }}>
+              <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 12px ${font.sans}` }}>
                 Map
               </button>
             </div>
@@ -2258,7 +2258,7 @@ export default function Home() {
                 pins={anonPins}
               />
               {anonPins.length === 0 && dishes.length > 0 && (
-                <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
+                <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 13.5px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
                   Cooks haven&apos;t shared their locations yet.
                 </div>
               )}
@@ -2273,10 +2273,10 @@ export default function Home() {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                        <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
-                        <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                        <div style={{ font: `500 17px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                        <div style={{ font: `500 17px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 13.5px ${font.sans}` }}>
                         {dish.seller_photo_url ? (
                           <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
                         ) : (
@@ -2285,15 +2285,15 @@ export default function Home() {
                         {dish.seller_name}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
-                        <RatingChip dish={dish} size={11} />
-                        <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
+                        <RatingChip dish={dish} size={12} />
+                        <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 12px ${font.sans}` }}>♥ {dish.likes}</span>
                       </div>
                     </div>
                   </div>
                 </SignInButton>
               ))}
               {dishes.length === 0 && (
-                <div style={{ padding: '30px 24px', textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                <div style={{ padding: '30px 24px', textAlign: 'center', color: C.muted, font: `400 14.5px ${font.sans}` }}>
                   No dishes to show yet.
                 </div>
               )}
@@ -2305,19 +2305,19 @@ export default function Home() {
               <button
                 onClick={loadMoreDishes}
                 disabled={loadingMoreDishes}
-                style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 14.5px ${font.sans}` }}
               >
                 {loadingMoreDishes ? 'Loading…' : 'Load more dishes'}
               </button>
             </div>
           )}
 
-          <div style={{ padding: '24px 20px 12px', textAlign: 'center', color: C.muted, font: `400 12.5px ${font.sans}` }}>
+          <div style={{ padding: '24px 20px 12px', textAlign: 'center', color: C.muted, font: `400 13.5px ${font.sans}` }}>
             Sign in to order, save favorites, and become a cook.
           </div>
 
           {/* Legal footer */}
-          <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
+          <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 12px ${font.sans}`, color: C.muted }}>
             <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
             <span>·</span>
             <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
@@ -2456,7 +2456,7 @@ export default function Home() {
                 {user.latitude != null && (
                   <button
                     onClick={() => setShowNearbyPanel(true)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.cardAlt, padding: '7px 11px', borderRadius: 20, font: `500 12px ${font.sans}`, color: C.inkSoft }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.cardAlt, padding: '7px 11px', borderRadius: 20, font: `500 13.5px ${font.sans}`, color: C.inkSoft }}
                   >
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.green }} />
                     Within {nearbyRadiusMi < 1 ? nearbyRadiusMi.toFixed(1) : Math.round(nearbyRadiusMi)} mi ▾
@@ -2518,7 +2518,7 @@ export default function Home() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search dishes or cooks…"
-                    style={{ flex: 1, border: 'none', outline: 'none', font: `400 13.5px ${font.sans}`, background: 'transparent', color: C.ink, minWidth: 0 }}
+                    style={{ flex: 1, border: 'none', outline: 'none', font: `400 14.5px ${font.sans}`, background: 'transparent', color: C.ink, minWidth: 0 }}
                   />
                   {searchQuery && (
                     <button onClick={() => setSearchQuery('')} style={{ color: C.muted, padding: 2, display: 'flex' }}>
@@ -2537,7 +2537,7 @@ export default function Home() {
                     background: activeFilterCount > 0 ? C.ink : C.card,
                     color: activeFilterCount > 0 ? '#fff' : C.inkSoft,
                     border: `1px solid ${activeFilterCount > 0 ? C.ink : C.divider}`,
-                    borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap'
+                    borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap'
                   }}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2550,27 +2550,27 @@ export default function Home() {
                 </button>
 
                 {distanceFilter !== 'any' && (
-                  <button onClick={() => setDistanceFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  <button onClick={() => setDistanceFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
                     Within {distanceFilter === '1mi' ? '1 mi' : distanceFilter === '3mi' ? '3 mi' : '5 mi'}
-                    <X size={11} />
+                    <X size={12} />
                   </button>
                 )}
                 {ratingFilter !== 'any' && (
-                  <button onClick={() => setRatingFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  <button onClick={() => setRatingFilter('any')} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
                     {ratingFilter === '4plus' ? '4+ stars' : '4.5+ stars'}
-                    <X size={11} />
+                    <X size={12} />
                   </button>
                 )}
                 {dietaryFilter.map(tag => (
-                  <button key={tag} onClick={() => toggleDietaryTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 11.5px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  <button key={tag} onClick={() => toggleDietaryTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
                     {tag}
-                    <X size={11} />
+                    <X size={12} />
                   </button>
                 ))}
               </div>
 
               {isFiltering && (
-                <div style={{ padding: '10px 20px 0', font: `400 12px ${font.sans}`, color: C.muted }}>
+                <div style={{ padding: '10px 20px 0', font: `400 13.5px ${font.sans}`, color: C.muted }}>
                   {filteredDishes.length === 0 ? 'No dishes match' : `${filteredDishes.length} result${filteredDishes.length === 1 ? '' : 's'}`}
                 </div>
               )}
@@ -2580,14 +2580,14 @@ export default function Home() {
                   <div onClick={() => openMeal(heroDish)} style={{ cursor: 'pointer', position: 'relative', borderRadius: 22, overflow: 'hidden', boxShadow: '0 8px 22px rgba(60,40,20,.16)' }}>
                     <PhotoTile dish={heroDish} height={224} radius={0} />
                     <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 36%,rgba(30,15,5,.76))' }} />
-                    <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 10px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
+                    <div style={{ position: 'absolute', top: 13, left: 13, background: C.terracotta, color: '#fff', padding: '6px 11px', borderRadius: 20, font: `500 11px ${font.sans}`, letterSpacing: '.06em' }}>COOK OF THE DAY</div>
                     <div style={{ position: 'absolute', left: 16, right: 16, bottom: 15, color: '#fff' }}>
                       <div style={{ font: `500 22px/1.08 ${font.serif}` }}>{heroDish.name}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 12.5px ${font.sans}`, opacity: .95 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 8, font: `400 13.5px ${font.sans}`, opacity: .95 }}>
                         {heroDish.seller_photo_url ? (
                           <span style={{ width: 23, height: 23, borderRadius: '50%', backgroundImage: `url(${heroDish.seller_photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
                         ) : (
-                          <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 10px ${font.sans}` }}>{heroDish.seller_avatar}</span>
+                          <span style={{ width: 23, height: 23, borderRadius: '50%', background: '#e7dcc9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 11px ${font.sans}` }}>{heroDish.seller_avatar}</span>
                         )}
                         {heroDish.seller_name}
                         {(heroDish.review_count ?? 0) > 0 && (
@@ -2607,25 +2607,25 @@ export default function Home() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '22px 20px 12px' }}>
                 <div style={{ font: `500 19px/1 ${font.serif}`, color: C.ink }}>{isFiltering ? 'Results' : 'Fresh from the block'}</div>
                 <div style={{ display: 'flex', gap: 4, background: C.cardAlt, padding: 3, borderRadius: 20 }}>
-                  <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button onClick={() => setFeedView('list')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'list' ? C.ink : 'transparent', color: feedView === 'list' ? '#fff' : C.inkSoft, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
                     List
                   </button>
-                  <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 11px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button onClick={() => setFeedView('map')} style={{ padding: '5px 12px', borderRadius: 16, background: feedView === 'map' ? C.ink : 'transparent', color: feedView === 'map' ? '#fff' : C.inkSoft, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
                     Map
                   </button>
                 </div>
               </div>
 
               {dishes.length === 0 && (
-                <div style={{ padding: '0 20px 8px', font: `400 12px ${font.sans}`, color: C.muted }}>No dishes yet</div>
+                <div style={{ padding: '0 20px 8px', font: `400 13.5px ${font.sans}`, color: C.muted }}>No dishes yet</div>
               )}
               {isFiltering && filteredDishes.length === 0 && dishes.length > 0 && (
                 <div style={{ padding: '30px 24px', textAlign: 'center' }}>
                   <Search size={30} color={C.muted} style={{ opacity: .4, marginBottom: 10 }} />
                   <div style={{ font: `500 14px ${font.serif}`, color: C.ink, marginBottom: 4 }}>No matches</div>
-                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginBottom: 12 }}>Try different keywords or clear a filter.</div>
+                  <div style={{ font: `400 13.5px ${font.sans}`, color: C.muted, marginBottom: 12 }}>Try different keywords or clear a filter.</div>
                   {activeFilterCount > 0 && (
-                    <button onClick={clearFilters} style={{ padding: '8px 16px', background: C.terracotta, color: '#fff', borderRadius: 20, font: `500 12.5px ${font.sans}` }}>
+                    <button onClick={clearFilters} style={{ padding: '8px 16px', background: C.terracotta, color: '#fff', borderRadius: 20, font: `500 13.5px ${font.sans}` }}>
                       Clear filters
                     </button>
                   )}
@@ -2652,7 +2652,7 @@ export default function Home() {
                       }))}
                   />
                   {(isFiltering ? filteredDishes : dishes).filter(d => d.seller_latitude != null).length === 0 && dishes.length > 0 && (
-                    <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 12px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
+                    <div style={{ marginTop: 10, padding: 12, background: C.card, borderRadius: 12, font: `400 13.5px ${font.sans}`, color: C.muted, textAlign: 'center' }}>
                       {isFiltering ? 'No dishes match your filters on the map.' : 'No cooks have shared a location yet. Ask cooks to enable location in their kitchen setup.'}
                     </div>
                   )}
@@ -2670,12 +2670,12 @@ export default function Home() {
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                            <div style={{ font: `500 16px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
-                            <div style={{ font: `500 16px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
+                            <div style={{ font: `500 17px/1.12 ${font.serif}`, color: C.ink }}>{dish.name}</div>
+                            <div style={{ font: `500 17px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(dish.price).toFixed(0)}</div>
                           </div>
                           {/* Cook identity — display only. Tapping anywhere on the card opens
                               the meal; the cook's page is linked from the meal screen. */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 12px ${font.sans}` }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 6, color: C.muted, font: `400 13.5px ${font.sans}` }}>
                             {dish.seller_photo_url ? (
                               <span style={{ width: 17, height: 17, borderRadius: '50%', backgroundImage: `url(${dish.seller_photo_url})`, backgroundSize: 'cover' }} />
                             ) : (
@@ -2685,13 +2685,13 @@ export default function Home() {
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9, flexWrap: 'wrap' }}>
                             {dist !== null && (
-                              <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
+                              <span style={{ background: C.greenLight, color: C.green, padding: '4px 9px', borderRadius: 8, font: `500 12px ${font.sans}` }}>{dist < 0.1 ? 'nearby' : `~${dist.toFixed(1)} mi`}</span>
                             )}
                             {dish.seller_kitchen_environment && (
-                              <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>{dish.seller_kitchen_environment}</span>
+                              <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '4px 9px', borderRadius: 8, font: `500 12px ${font.sans}` }}>{dish.seller_kitchen_environment}</span>
                             )}
-                            <RatingChip dish={dish} size={11} />
-                            <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 10.5px ${font.sans}` }}>♥ {dish.likes}</span>
+                            <RatingChip dish={dish} size={12} />
+                            <span style={{ background: C.terracottaLight, color: C.terracotta, padding: '4px 9px', borderRadius: 8, font: `500 12px ${font.sans}` }}>♥ {dish.likes}</span>
                           </div>
                         </div>
                       </div>
@@ -2705,7 +2705,7 @@ export default function Home() {
                   <button
                     onClick={loadMoreSearch}
                     disabled={searchLoading}
-                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 14.5px ${font.sans}` }}
                   >
                     {searchLoading ? 'Loading…' : 'Load more results'}
                   </button>
@@ -2716,7 +2716,7 @@ export default function Home() {
                   <button
                     onClick={loadMoreDishes}
                     disabled={loadingMoreDishes}
-                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 13px ${font.sans}` }}
+                    style={{ width: '100%', padding: 13, background: C.cardAlt, color: C.inkSoft, borderRadius: 12, font: `500 14.5px ${font.sans}` }}
                   >
                     {loadingMoreDishes ? 'Loading…' : 'Load more dishes'}
                   </button>
@@ -2727,24 +2727,24 @@ export default function Home() {
                 {user && user.seller_status === 'approved' ? (
                   <div onClick={() => setScreen('seller-dashboard')} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
-                      <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Your kitchen</div>
-                      <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Manage your plates and orders.</div>
+                      <div style={{ font: `500 17px/1.1 ${font.serif}` }}>Your kitchen</div>
+                      <div style={{ font: `400 13.5px ${font.sans}`, opacity: .85, marginTop: 4 }}>Manage your plates and orders.</div>
                     </div>
-                    <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Open</div>
+                    <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 13.5px ${font.sans}` }}>Open</div>
                   </div>
                 ) : (
                   <div onClick={toggleSellerMode} style={{ cursor: 'pointer', background: C.green, borderRadius: 20, padding: '17px 18px', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div>
-                      <div style={{ font: `500 16px/1.1 ${font.serif}` }}>Are you a home cook?</div>
-                      <div style={{ font: `400 12px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
+                      <div style={{ font: `500 17px/1.1 ${font.serif}` }}>Are you a home cook?</div>
+                      <div style={{ font: `400 13.5px ${font.sans}`, opacity: .85, marginTop: 4 }}>Post today's plate in minutes.</div>
                     </div>
-                    <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 12.5px ${font.sans}` }}>Start cooking</div>
+                    <div style={{ background: '#fff', color: C.green, padding: '10px 15px', borderRadius: 13, font: `500 13.5px ${font.sans}` }}>Start cooking</div>
                   </div>
                 )}
               </div>
 
               {/* Legal footer */}
-              <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
+              <div style={{ padding: '0 20px 20px', display: 'flex', gap: 14, justifyContent: 'center', font: `400 12px ${font.sans}`, color: C.muted }}>
                 <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
                 <span>·</span>
                 <a href="/privacy" style={{ color: C.muted, textDecoration: 'none' }}>Privacy</a>
