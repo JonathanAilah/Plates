@@ -414,7 +414,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs' | 'admin-finance'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [dishOffset, setDishOffset] = useState(0);
@@ -672,6 +672,9 @@ export default function Home() {
   // Admin state
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
   const [adminFinancials, setAdminFinancials] = useState<any>(null);
+  // Drill-down behind the Platform revenue / Gross sales cards
+  const [adminFinance, setAdminFinance] = useState<any>(null);
+  const [adminFinanceTab, setAdminFinanceTab] = useState<'revenue' | 'gross'>('revenue');
   const [adminPending, setAdminPending] = useState<any[]>([]);
   const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
   const [adminUserFilter, setAdminUserFilter] = useState<'all' | 'pending' | 'sellers' | 'suspended' | 'admins' | 'disabled'>('all');
@@ -695,6 +698,7 @@ export default function Home() {
   const [adminOrdersLoadingMore, setAdminOrdersLoadingMore] = useState(false);
   const [adminCooks, setAdminCooks] = useState<any[]>([]);
   const [adminCooksUnattributed, setAdminCooksUnattributed] = useState<any>(null);
+  const [adminCooksSummary, setAdminCooksSummary] = useState<any>(null);
   const [adminCooksSearch, setAdminCooksSearch] = useState('');
   const [adminCooksOffset, setAdminCooksOffset] = useState(0);
   const [adminCooksHasMore, setAdminCooksHasMore] = useState(false);
@@ -868,6 +872,17 @@ export default function Home() {
       setAdminFinancials(data);
     } catch (e) {
       console.error('Load admin financials error:', e);
+    }
+  };
+
+  const loadAdminFinanceBreakdown = async () => {
+    try {
+      const res = await fetch('/api/admin?action=financeBreakdown');
+      if (!res.ok) return;
+      const data = await res.json();
+      setAdminFinance(data);
+    } catch (e) {
+      console.error('Load finance breakdown error:', e);
     }
   };
   // Save the admin's fee/tax/tip edits, then apply them to the live cart math
@@ -1051,6 +1066,7 @@ export default function Home() {
       const arr = Array.isArray(data?.cooks) ? data.cooks : [];
       setAdminCooks(prev => (reset ? arr : [...prev, ...arr]));
       if (data?.unattributed) setAdminCooksUnattributed(data.unattributed);
+      if (data?.summary) setAdminCooksSummary(data.summary);
       setAdminCooksHasMore(arr.length === ADMIN_PAGE_SIZE);
       setAdminCooksOffset(offset + arr.length);
     } catch (e) { console.error('Admin cook payouts error:', e); }
@@ -1945,6 +1961,7 @@ export default function Home() {
         });
       }).catch(() => {});
     }
+    if (screen === 'admin-finance' && chief) loadAdminFinanceBreakdown();
     if (screen === 'admin-pending' && moderator) loadAdminPending();
     if (screen === 'admin-users' && moderator) loadAdminUsers();
     if (screen === 'admin-dishes' && moderator) loadAdminDishes();
@@ -5761,11 +5778,11 @@ export default function Home() {
                 <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Financials</div>
 
                 <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-                  <button onClick={() => setScreen('admin-orders')} style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14, textAlign: 'left' }}>
+                  <button onClick={() => { setAdminFinanceTab('revenue'); setScreen('admin-finance'); }} style={{ flex: 1, background: C.greenLight, borderRadius: 12, padding: 14, textAlign: 'left' }}>
                     <div style={{ font: `600 22px ${font.serif}`, color: C.green }}>${Number(adminFinancials.totals?.platform_revenue || 0).toFixed(2)}</div>
                     <div style={{ font: `400 11px ${font.sans}`, color: C.green, display: 'flex', alignItems: 'center', gap: 3 }}>Platform revenue <ChevronRight size={11} /></div>
                   </button>
-                  <button onClick={() => setScreen('admin-orders')} style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14, textAlign: 'left' }}>
+                  <button onClick={() => { setAdminFinanceTab('gross'); setScreen('admin-finance'); }} style={{ flex: 1, background: C.cardAlt, borderRadius: 12, padding: 14, textAlign: 'left' }}>
                     <div style={{ font: `600 22px ${font.serif}`, color: C.ink }}>${Number(adminFinancials.totals?.gross_sales || 0).toFixed(2)}</div>
                     <div style={{ font: `400 11px ${font.sans}`, color: C.muted, display: 'flex', alignItems: 'center', gap: 3 }}>Gross sales <ChevronRight size={11} /></div>
                   </button>
@@ -6387,6 +6404,106 @@ export default function Home() {
           </div>
         )}
 
+        {/* ================= ADMIN: FINANCE BREAKDOWN ================= */}
+        {screen === 'admin-finance' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Financial breakdown</div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+              {([
+                { key: 'revenue', label: 'Platform revenue' },
+                { key: 'gross', label: 'Gross sales' },
+              ] as const).map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setAdminFinanceTab(t.key)}
+                  style={{ padding: '7px 14px', background: adminFinanceTab === t.key ? C.ink : C.card, color: adminFinanceTab === t.key ? '#fff' : C.inkSoft, border: `1px solid ${adminFinanceTab === t.key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}` }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {!adminFinance ? (
+              <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>Loading…</div>
+            ) : adminFinanceTab === 'revenue' ? (
+              <>
+                <div style={{ background: C.greenLight, borderRadius: 14, padding: 18, marginBottom: 14 }}>
+                  <div style={{ font: `600 30px ${font.serif}`, color: C.green }}>${Number(adminFinance.revenue.rev_all).toFixed(2)}</div>
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.green, marginTop: 2 }}>
+                    All-time platform revenue · {adminFinance.revenue.orders_all} orders
+                  </div>
+                </div>
+
+                <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  {[
+                    { label: 'Today', value: `$${Number(adminFinance.revenue.rev_today).toFixed(2)}`, sub: `${adminFinance.revenue.orders_today} order${Number(adminFinance.revenue.orders_today) === 1 ? '' : 's'}` },
+                    { label: 'This month', value: `$${Number(adminFinance.revenue.rev_month).toFixed(2)}`, sub: `${adminFinance.revenue.orders_month} order${Number(adminFinance.revenue.orders_month) === 1 ? '' : 's'}` },
+                    { label: 'This year', value: `$${Number(adminFinance.revenue.rev_year).toFixed(2)}`, sub: null },
+                    { label: 'All-time', value: `$${Number(adminFinance.revenue.rev_all).toFixed(2)}`, sub: `${adminFinance.revenue.orders_all} order${Number(adminFinance.revenue.orders_all) === 1 ? '' : 's'}` },
+                  ].map((r, i, arr) => (
+                    <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < arr.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
+                      <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft }}>{r.label}</div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{r.value}</div>
+                        {r.sub && <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{r.sub}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ font: `400 11.5px/1.5 ${font.sans}`, color: C.muted, marginBottom: 14 }}>
+                  Platform revenue is the 15% commission on cook sales. Service fees (${Number(adminFinance.revenue.service_fees_all).toFixed(2)}) and tax (${Number(adminFinance.revenue.tax_all).toFixed(2)}) are tracked separately under Gross sales.
+                </div>
+
+                <button onClick={() => setScreen('admin-orders')} style={{ width: '100%', padding: 12, background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 10, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  View all orders <ChevronRight size={14} />
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{ background: C.cardAlt, borderRadius: 14, padding: 18, marginBottom: 14 }}>
+                  <div style={{ font: `600 30px ${font.serif}`, color: C.ink }}>${Number(adminFinance.gross.gross_sales).toFixed(2)}</div>
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                    All-time gross sales · {adminFinance.gross.order_count} orders
+                  </div>
+                </div>
+
+                <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  {[
+                    { label: 'Orders', value: String(adminFinance.gross.order_count), sub: null },
+                    { label: 'Gross sales', value: `$${Number(adminFinance.gross.gross_sales).toFixed(2)}`, sub: null },
+                    { label: 'Refunds', value: `$${Number(adminFinance.gross.refund_total).toFixed(2)}`, sub: `${adminFinance.gross.refund_count} cancelled order${Number(adminFinance.gross.refund_count) === 1 ? '' : 's'}` },
+                    { label: 'Tax collected', value: `$${Number(adminFinance.gross.tax_collected).toFixed(2)}`, sub: null },
+                    { label: 'Service fees', value: `$${Number(adminFinance.gross.service_fees).toFixed(2)}`, sub: null },
+                  ].map((r, i, arr) => (
+                    <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < arr.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
+                      <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft }}>{r.label}</div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{r.value}</div>
+                        {r.sub && <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{r.sub}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ font: `400 11.5px/1.5 ${font.sans}`, color: C.muted, marginBottom: 14 }}>
+                  Tax and service fees are recorded per order starting now — orders placed before this update aren&apos;t included in those two totals. Refunds are the full line value of cancelled orders.
+                </div>
+
+                <button onClick={() => setScreen('admin-orders')} style={{ width: '100%', padding: 12, background: C.card, border: `1px solid ${C.divider}`, color: C.ink, borderRadius: 10, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  View all orders <ChevronRight size={14} />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {/* ================= ADMIN: ORDERS (financial drill-down) ================= */}
         {screen === 'admin-orders' && user.role === 'admin' && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
@@ -6488,6 +6605,23 @@ export default function Home() {
               </button>
               <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Cook payouts</div>
             </div>
+
+            {adminCooksSummary && (
+              <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                {[
+                  { label: 'Cooks with sales', value: String(adminCooksSummary.cook_count) },
+                  { label: 'Gross made by cooks', value: `$${Number(adminCooksSummary.gross_sales).toFixed(2)}` },
+                  { label: 'Cook share (earnings + tips)', value: `$${Number(adminCooksSummary.net_owed).toFixed(2)}` },
+                  { label: 'Paid out so far', value: `$${Number(adminCooksSummary.paid_out).toFixed(2)}` },
+                  { label: 'Still to be paid', value: `$${Number(adminCooksSummary.to_be_paid).toFixed(2)}` },
+                ].map((r, i, arr) => (
+                  <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < arr.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
+                    <div style={{ font: `500 12.5px ${font.sans}`, color: C.inkSoft }}>{r.label}</div>
+                    <div style={{ font: `500 14px ${font.serif}`, color: i === arr.length - 1 ? C.terracotta : C.ink }}>{r.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div style={{ background: '#fff', borderRadius: 12, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
               <Search size={15} color={C.muted} />
