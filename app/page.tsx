@@ -619,6 +619,7 @@ export default function Home() {
   const [adminOrdersHasMore, setAdminOrdersHasMore] = useState(false);
   const [adminOrdersLoadingMore, setAdminOrdersLoadingMore] = useState(false);
   const [adminCooks, setAdminCooks] = useState<any[]>([]);
+  const [adminCooksUnattributed, setAdminCooksUnattributed] = useState<any>(null);
   const [adminCooksSearch, setAdminCooksSearch] = useState('');
   const [adminCooksOffset, setAdminCooksOffset] = useState(0);
   const [adminCooksHasMore, setAdminCooksHasMore] = useState(false);
@@ -902,8 +903,9 @@ export default function Home() {
       const res = await fetch(`/api/admin?${params.toString()}`);
       if (!res.ok) return;
       const data = await res.json();
-      const arr = Array.isArray(data) ? data : [];
+      const arr = Array.isArray(data?.cooks) ? data.cooks : [];
       setAdminCooks(prev => (reset ? arr : [...prev, ...arr]));
+      if (data?.unattributed) setAdminCooksUnattributed(data.unattributed);
       setAdminCooksHasMore(arr.length === ADMIN_PAGE_SIZE);
       setAdminCooksOffset(offset + arr.length);
     } catch (e) { console.error('Admin cook payouts error:', e); }
@@ -6034,6 +6036,12 @@ export default function Home() {
                 style={{ flex: 1, border: 'none', outline: 'none', font: `400 13px ${font.sans}`, background: 'transparent' }}
               />
             </div>
+
+            {adminCooksUnattributed && Number(adminCooksUnattributed.order_count) > 0 && (
+              <div style={{ background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 12, padding: 12, marginBottom: 12, font: `400 12px/1.5 ${font.sans}`, color: '#7a5c0b' }}>
+                ${Number(adminCooksUnattributed.cook_earnings).toFixed(2)} across {adminCooksUnattributed.order_count} order{Number(adminCooksUnattributed.order_count) === 1 ? '' : 's'} can&apos;t be attributed to a cook — the dish was deleted before seller tracking existed. Included in the Financials totals but not in any cook&apos;s row below.
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {adminCooks.map((c: any) => (
