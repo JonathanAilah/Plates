@@ -14,6 +14,14 @@ const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 const AddressAutocomplete = dynamic(() => import('@/components/AddressAutocomplete'), { ssr: false });
 const CheckoutPayment = dynamic(() => import('@/components/CheckoutPayment'), { ssr: false });
 
+// Staff tiers. Chief admins ('admin') see everything; secondary admins see
+// everything except financials/pricing/role management; support (customer
+// service) only sees bug reports. Server enforces the same rules per action.
+const isStaffRole = (r?: string | null) => r === 'admin' || r === 'secondary_admin' || r === 'support';
+const isModRole = (r?: string | null) => r === 'admin' || r === 'secondary_admin';
+const ROLE_BADGE: Record<string, string> = { admin: 'ADMIN', secondary_admin: 'SECONDARY ADMIN', support: 'SUPPORT' };
+const ROLE_NAME: Record<string, string> = { user: 'Member', admin: 'Chief admin', secondary_admin: 'Secondary admin', support: 'Customer service' };
+
 interface Dish {
   id: number;
   name: string;
@@ -203,7 +211,7 @@ interface AdminUserRow {
   email: string;
   avatar: string;
   photo_url: string | null;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'secondary_admin' | 'support';
   seller_status: string;
   account_disabled: boolean;
   kitchen_name: string | null;
@@ -260,7 +268,7 @@ interface User {
   pickup_max_minutes: number | null;
   terms_accepted_at: string | null;
   terms_version: string | null;
-  role: 'user' | 'admin';
+  role: 'user' | 'admin' | 'secondary_admin' | 'support';
   seller_status: 'not_seller' | 'pending' | 'approved' | 'rejected' | 'suspended';
   rejection_reason: string | null;
   suspended_reason: string | null;
@@ -1163,10 +1171,10 @@ export default function Home() {
     }
   };
 
-  const adminSetRole = async (userId: number, role: 'user' | 'admin') => {
+  const adminSetRole = async (userId: number, role: 'user' | 'admin' | 'secondary_admin' | 'support') => {
     const result = await adminAction({ action: 'setRole', userId, role });
     if (result) {
-      showToast(role === 'admin' ? 'Promoted to admin' : 'Admin removed');
+      showToast(role === 'user' ? 'Staff role removed' : `Role set: ${ROLE_NAME[role]}`);
       if (adminSelectedUser?.user?.id === userId) await loadAdminUserDetail(userId);
     }
   };
@@ -1910,12 +1918,15 @@ export default function Home() {
   }, [cart]);
 
 
-  // Load specific admin data when opening admin screens
+  // Load specific admin data when opening admin screens. Only fetch what
+  // this staff tier is allowed to see — the server rejects the rest anyway.
   useEffect(() => {
-    if (!user || user.role !== 'admin') return;
-    if (screen === 'admin') loadAdminStats();
-    if (screen === 'admin') loadAdminFinancials();
-    if (screen === 'admin') {
+    if (!user || !isStaffRole(user.role)) return;
+    const chief = user.role === 'admin';
+    const moderator = isModRole(user.role);
+    if (screen === 'admin' && moderator) loadAdminStats();
+    if (screen === 'admin' && chief) loadAdminFinancials();
+    if (screen === 'admin' && chief) {
       fetch('/api/settings').then(r => r.ok ? r.json() : null).then(s => {
         if (s) setFeeDraft({
           taxPercent: String(s.taxPercent),
@@ -1925,9 +1936,9 @@ export default function Home() {
         });
       }).catch(() => {});
     }
-    if (screen === 'admin-pending') loadAdminPending();
-    if (screen === 'admin-users') loadAdminUsers();
-    if (screen === 'admin-dishes') loadAdminDishes();
+    if (screen === 'admin-pending' && moderator) loadAdminPending();
+    if (screen === 'admin-users' && moderator) loadAdminUsers();
+    if (screen === 'admin-dishes' && moderator) loadAdminDishes();
     if (screen === 'admin-bugs') loadAdminBugs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, adminUserFilter, adminUserSearch, adminDishSearch, adminBugFilter]);
@@ -2455,8 +2466,9 @@ export default function Home() {
   }
 
   // Ask the browser for notification permission and register a push
-  // subscription for this cook, saving it to the server.
-  const enablePushNotifications = async () => {
+  // subscription for this user, saving it to the server. Used by cooks
+  // (order alerts) and customer-service staff (bug report alerts).
+  const enablePushNotifications = async (successMessage = 'Order notifications enabled!') => {
     if (!user) return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       showToast('Push notifications are not supported in this browser');
@@ -2491,7 +2503,7 @@ export default function Home() {
         return;
       }
 
-      showToast('Order notifications enabled!');
+      showToast(successMessage);
     } catch (error) {
       console.error('Push subscription error:', error);
       showToast('Could not enable notifications');
@@ -3147,8 +3159,8 @@ export default function Home() {
                     Within {nearbyRadiusMi < 1 ? nearbyRadiusMi.toFixed(1) : Math.round(nearbyRadiusMi)} mi ▾
                   </button>
                 )}
-                {user.role === 'admin' && (
-                  <button onClick={() => setScreen('admin')} style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', background: (adminStats && adminStats.pending > 0) ? C.terracotta : C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: (adminStats && adminStats.pending > 0) ? '#fff' : C.inkSoft }}>
+                {isStaffRole(user.role) && (
+                  <button onClick={() => setScreen(isModRole(user.role) ? 'admin' : 'admin-bugs')} style={{ position: 'relative', width: 38, height: 38, borderRadius: '50%', background: (adminStats && adminStats.pending > 0) ? C.terracotta : C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: (adminStats && adminStats.pending > 0) ? '#fff' : C.inkSoft }}>
                     <Shield size={17} />
                     {adminStats && adminStats.pending > 0 && (
                       <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9, background: '#fff', color: C.terracotta, font: `700 10px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `2px solid ${C.terracotta}` }}>{adminStats.pending}</span>
@@ -3553,7 +3565,7 @@ export default function Home() {
                   ) : (
                     posts.map(p => {
                       const isMine = p.user_id === user.id;
-                      const canModerate = isMine || user.role === 'admin';
+                      const canModerate = isMine || isModRole(user.role);
                       const isCook = p.author_seller_status === 'approved';
                       const isExpanded = expandedCommentsFor === p.id;
                       const comments = postComments[p.id] || [];
@@ -3661,7 +3673,7 @@ export default function Home() {
                                       <div style={{ flex: 1, background: C.card, borderRadius: 10, padding: '6px 10px', minWidth: 0 }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between' }}>
                                           <span style={{ font: `500 11.5px ${font.sans}`, color: C.ink }}>{c.author_name}</span>
-                                          {(c.user_id === user.id || user.role === 'admin') && (
+                                          {(c.user_id === user.id || isModRole(user.role)) && (
                                             <button
                                               onClick={() => deleteCommentAction(p.id, c.id)}
                                               style={{ color: C.muted, padding: 0, font: `400 10px ${font.sans}` }}
@@ -4685,7 +4697,7 @@ export default function Home() {
                     </div>
                   </div>
                   <button
-                    onClick={enablePushNotifications}
+                    onClick={() => enablePushNotifications()}
                     style={{ padding: '10px 14px', background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}`, border: 'none', cursor: 'pointer', flex: 'none' }}
                   >
                     Enable
@@ -5632,7 +5644,7 @@ export default function Home() {
         )}
 
         {/* ================= ADMIN: DASHBOARD ================= */}
-        {screen === 'admin' && user.role === 'admin' && (
+        {screen === 'admin' && isModRole(user.role) && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
               <button onClick={() => setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
@@ -5640,7 +5652,7 @@ export default function Home() {
               </button>
               <div style={{ flex: 1, font: `500 22px ${font.serif}`, color: C.ink }}>Admin</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', background: C.ink, color: '#fff', borderRadius: 12, font: `500 10px ${font.sans}`, letterSpacing: '.05em' }}>
-                <Shield size={11} /> ADMIN
+                <Shield size={11} /> {ROLE_BADGE[user.role] || 'ADMIN'}
               </div>
             </div>
 
@@ -5661,7 +5673,7 @@ export default function Home() {
               </div>
             )}
 
-            {feeDraft && (
+            {user.role === 'admin' && feeDraft && (
               <div style={{ marginBottom: 20 }}>
                 <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Fees &amp; pricing</div>
                 <div style={{ background: C.card, borderRadius: 14, padding: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
@@ -5703,7 +5715,7 @@ export default function Home() {
               </div>
             )}
 
-            {adminFinancials && (
+            {user.role === 'admin' && adminFinancials && (
               <div style={{ marginBottom: 20 }}>
                 <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Financials</div>
 
@@ -5832,7 +5844,7 @@ export default function Home() {
         )}
 
         {/* ================= ADMIN: PENDING SELLERS ================= */}
-        {screen === 'admin-pending' && user.role === 'admin' && (
+        {screen === 'admin-pending' && isModRole(user.role) && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
               <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
@@ -5941,7 +5953,7 @@ export default function Home() {
         )}
 
         {/* ================= ADMIN: ALL USERS ================= */}
-        {screen === 'admin-users' && user.role === 'admin' && (
+        {screen === 'admin-users' && isModRole(user.role) && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
               <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
@@ -5995,8 +6007,8 @@ export default function Home() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ font: `500 14px ${font.serif}`, color: C.ink }}>{u.name}</span>
-                      {u.role === 'admin' && (
-                        <span style={{ padding: '1px 6px', background: C.ink, color: '#fff', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.05em' }}>ADMIN</span>
+                      {isStaffRole(u.role) && (
+                        <span style={{ padding: '1px 6px', background: C.ink, color: '#fff', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.05em' }}>{ROLE_BADGE[u.role]}</span>
                       )}
                     </div>
                     <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</div>
@@ -6028,7 +6040,7 @@ export default function Home() {
         )}
 
         {/* ================= ADMIN: USER DETAIL ================= */}
-        {screen === 'admin-user-detail' && user.role === 'admin' && adminSelectedUser && (() => {
+        {screen === 'admin-user-detail' && isModRole(user.role) && adminSelectedUser && (() => {
           const u = adminSelectedUser.user;
           const isMe = u.id === user.id;
           return (
@@ -6050,8 +6062,8 @@ export default function Home() {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <span style={{ font: `500 17px ${font.serif}`, color: C.ink }}>{u.name}</span>
-                      {u.role === 'admin' && (
-                        <span style={{ padding: '2px 8px', background: C.ink, color: '#fff', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.05em' }}>ADMIN</span>
+                      {isStaffRole(u.role) && (
+                        <span style={{ padding: '2px 8px', background: C.ink, color: '#fff', borderRadius: 6, font: `500 9px ${font.sans}`, letterSpacing: '.05em' }}>{ROLE_BADGE[u.role]}</span>
                       )}
                       {isMe && (
                         <span style={{ padding: '2px 8px', background: C.terracottaLight, color: C.terracotta, borderRadius: 6, font: `500 9px ${font.sans}` }}>YOU</span>
@@ -6137,8 +6149,9 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Account controls */}
-              {!isMe && (
+              {/* Account controls. Secondary admins moderate members only —
+                  staff accounts and role changes belong to the chief admin. */}
+              {!isMe && (user.role === 'admin' || u.role === 'user') && (
                 <div style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
                   <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Account</div>
 
@@ -6146,10 +6159,32 @@ export default function Home() {
                     {u.account_disabled ? <><UserCheck size={14} /> Re-enable account</> : <><UserX size={14} /> Disable account</>}
                   </button>
 
-                  <button onClick={() => adminSetRole(u.id, u.role === 'admin' ? 'user' : 'admin')} disabled={adminActionSubmitting} style={{ width: '100%', padding: 10, background: u.role === 'admin' ? '#fceded' : C.ink, color: u.role === 'admin' ? '#8a2a2a' : '#fff', border: u.role === 'admin' ? `1px solid #f5b8b8` : 'none', borderRadius: 10, font: `500 12.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                    <Shield size={14} /> {u.role === 'admin' ? 'Remove admin' : 'Promote to admin'}
-                  </button>
-                 {adminDeleteConfirmingFor !== u.id ? (
+                  {user.role === 'admin' && (
+                    <div style={{ marginBottom: 8, padding: 10, background: C.surface, borderRadius: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, font: `500 11.5px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>
+                        <Shield size={13} /> Staff role
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                        {([
+                          { key: 'user', label: 'Member', hint: 'No admin access' },
+                          { key: 'support', label: 'Customer service', hint: 'Bug reports only' },
+                          { key: 'secondary_admin', label: 'Secondary admin', hint: 'All but financials' },
+                          { key: 'admin', label: 'Chief admin', hint: 'Full access' },
+                        ] as const).map(r => (
+                          <button
+                            key={r.key}
+                            onClick={() => u.role !== r.key && adminSetRole(u.id, r.key)}
+                            disabled={adminActionSubmitting || u.role === r.key}
+                            style={{ padding: '8px 6px', background: u.role === r.key ? C.ink : '#fff', color: u.role === r.key ? '#fff' : C.ink, border: `1px solid ${u.role === r.key ? C.ink : C.divider}`, borderRadius: 8, textAlign: 'left' }}
+                          >
+                            <div style={{ font: `500 12px ${font.sans}` }}>{r.label}</div>
+                            <div style={{ font: `400 10px ${font.sans}`, opacity: .7, marginTop: 1 }}>{r.hint}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                 {user.role === 'admin' && (adminDeleteConfirmingFor !== u.id ? (
                     <button
                       onClick={() => { setAdminDeleteConfirmingFor(u.id); setAdminDeleteChecked(false); }}
                       disabled={adminActionSubmitting}
@@ -6190,7 +6225,7 @@ export default function Home() {
                         </button>
                       </div>
                     </div>
-                  )} 
+                  ))}
                 </div>
               )}
 
@@ -6220,7 +6255,7 @@ export default function Home() {
         })()}
 
         {/* ================= ADMIN: DISH MODERATION ================= */}
-        {screen === 'admin-dishes' && user.role === 'admin' && (
+        {screen === 'admin-dishes' && isModRole(user.role) && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
               <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
@@ -6645,14 +6680,37 @@ export default function Home() {
         )}
 
         {/* ================= ADMIN: BUG REPORTS ================= */}
-        {screen === 'admin-bugs' && user.role === 'admin' && (
+        {screen === 'admin-bugs' && isStaffRole(user.role) && (
           <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+              {/* Support staff come straight from the feed — send them back there */}
+              <button onClick={() => setScreen(isModRole(user.role) ? 'admin' : 'feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
                 <ArrowLeft size={18} />
               </button>
-              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Bug reports</div>
+              <div style={{ flex: 1, font: `500 22px ${font.serif}`, color: C.ink }}>Bug reports</div>
+              {user.role === 'support' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', background: C.ink, color: '#fff', borderRadius: 12, font: `500 10px ${font.sans}`, letterSpacing: '.05em' }}>
+                  <Shield size={11} /> SUPPORT
+                </div>
+              )}
             </div>
+
+            {user.role === 'support' && (
+              <div style={{ background: C.card, borderRadius: 12, padding: 14, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Bug alerts</div>
+                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                    Get a push the moment a new report comes in, even with the app closed.
+                  </div>
+                </div>
+                <button
+                  onClick={() => enablePushNotifications('Bug alerts enabled!')}
+                  style={{ padding: '10px 14px', background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}`, border: 'none', cursor: 'pointer', flex: 'none' }}
+                >
+                  Enable
+                </button>
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
               {([

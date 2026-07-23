@@ -538,6 +538,19 @@ export async function isAdmin(userId: number): Promise<boolean> {
   return result.rows[0]?.role === 'admin';
 }
 
+export async function getUserRoleById(userId: number): Promise<string | null> {
+  const result = await sql`SELECT role FROM users WHERE id = ${userId} LIMIT 1`;
+  return result.rows[0]?.role ?? null;
+}
+
+// Customer-service staff who get a push notification when a bug report lands.
+export async function getBugAlertRecipients() {
+  const result = await sql`
+    SELECT id FROM users WHERE role = 'support' AND account_disabled = false
+  `;
+  return result.rows as { id: number }[];
+}
+
 export async function createDish(
   sellerId: number,
   name: string,
@@ -1481,7 +1494,7 @@ export async function setAccountDisabled(userId: number, disabled: boolean) {
   return result.rows[0];
 }
 
-export async function setUserRole(userId: number, role: 'user' | 'admin') {
+export async function setUserRole(userId: number, role: 'user' | 'admin' | 'secondary_admin' | 'support') {
   const result = await sql`
     UPDATE users SET role = ${role}
     WHERE id = ${userId}
@@ -1531,9 +1544,9 @@ export async function getAllUsersForAdmin(filter?: string, search?: string) {
   if (filter === 'admins') {
     const result = q
       ? await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
-                  FROM users WHERE role = 'admin' AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
+                  FROM users WHERE role != 'user' AND (LOWER(name) LIKE ${q} OR LOWER(email) LIKE ${q}) ORDER BY created_at DESC`
       : await sql`SELECT id, name, email, avatar, photo_url, role, seller_status, account_disabled, kitchen_name, created_at
-                  FROM users WHERE role = 'admin' ORDER BY created_at DESC`;
+                  FROM users WHERE role != 'user' ORDER BY created_at DESC`;
     return result.rows;
   }
   if (filter === 'disabled') {
@@ -1601,7 +1614,7 @@ export async function getAdminStats() {
   const pending = await sql`SELECT COUNT(*)::int as c FROM users WHERE seller_status = 'pending' AND account_disabled = false`;
   const sellers = await sql`SELECT COUNT(*)::int as c FROM users WHERE seller_status = 'approved'`;
   const suspended = await sql`SELECT COUNT(*)::int as c FROM users WHERE seller_status = 'suspended'`;
-  const admins = await sql`SELECT COUNT(*)::int as c FROM users WHERE role = 'admin'`;
+  const admins = await sql`SELECT COUNT(*)::int as c FROM users WHERE role != 'user'`;
   const totalUsers = await sql`SELECT COUNT(*)::int as c FROM users`;
   const totalDishes = await sql`SELECT COUNT(*)::int as c FROM dishes`;
   const totalOrders = await sql`SELECT COUNT(*)::int as c FROM orders`;

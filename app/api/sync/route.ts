@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     const [unread, ordersVersion, adminPending, chatVersion, activeOrders] = await Promise.all([
       getUnreadCounts(me.id),
       getOrdersVersion(me.id),
-      me.role === 'admin' ? getPendingSellersCount() : Promise.resolve(null),
+      (me.role === 'admin' || me.role === 'secondary_admin') ? getPendingSellersCount() : Promise.resolve(null),
       chatOrderId
         ? getOrderIfParticipant(chatOrderId, me.id).then(order =>
             order ? getMessagesVersion(chatOrderId) : null)
