@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star, CreditCard, Share2 } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star, CreditCard, Share2, Bug } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
@@ -194,6 +194,7 @@ interface AdminStats {
   totalDishes: number;
   totalOrders: number;
   orphanDishes: number;
+  openBugs: number;
 }
 
 interface AdminUserRow {
@@ -402,7 +403,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [dishOffset, setDishOffset] = useState(0);
@@ -687,6 +688,12 @@ export default function Home() {
   const [adminCookPastOffset, setAdminCookPastOffset] = useState(0);
   const [adminCookPastHasMore, setAdminCookPastHasMore] = useState(false);
   const [adminCookPastLoadingMore, setAdminCookPastLoadingMore] = useState(false);
+  // Bug reports: user-facing sheet + admin triage list
+  const [showBugSheet, setShowBugSheet] = useState(false);
+  const [bugText, setBugText] = useState('');
+  const [bugSubmitting, setBugSubmitting] = useState(false);
+  const [adminBugs, setAdminBugs] = useState<any[]>([]);
+  const [adminBugFilter, setAdminBugFilter] = useState<'open' | 'resolved' | 'all'>('open');
   const [adminActionSubmitting, setAdminActionSubmitting] = useState(false);
   const [adminRejectReason, setAdminRejectReason] = useState('');
   const [adminSuspendReason, setAdminSuspendReason] = useState('');
@@ -875,6 +882,59 @@ export default function Home() {
     } finally {
       setFeeSaving(false);
     }
+  };
+
+  const submitBugReport = async () => {
+    if (bugSubmitting || bugText.trim().length < 5) {
+      if (bugText.trim().length < 5) showToast('Tell us a little more — at least a sentence');
+      return;
+    }
+    setBugSubmitting(true);
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: bugText, screen }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Could not send your report');
+        return;
+      }
+      setBugText('');
+      setShowBugSheet(false);
+      showToast('Thanks — report received!');
+    } catch (e) {
+      console.error('Bug report error:', e);
+      showToast('Network error');
+    } finally {
+      setBugSubmitting(false);
+    }
+  };
+
+  const loadAdminBugs = async () => {
+    try {
+      const params = new URLSearchParams({ action: 'bugReports' });
+      if (adminBugFilter !== 'all') params.set('status', adminBugFilter);
+      const res = await fetch(`/api/admin?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAdminBugs(Array.isArray(data) ? data : []);
+      }
+    } catch (e) { console.error('Admin bugs error:', e); }
+  };
+
+  const setBugStatus = async (reportId: number, status: 'open' | 'resolved') => {
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'setBugStatus', reportId, status }),
+      });
+      if (res.ok) {
+        setAdminBugs(prev => prev.map(b => b.id === reportId ? { ...b, status } : b));
+      }
+    } catch (e) { console.error('Set bug status error:', e); }
   };
 
   const loadAdminPending = async () => {
@@ -1768,7 +1828,7 @@ export default function Home() {
         if (data.adminPending != null) {
           setAdminStats(prev => prev
             ? { ...prev, pending: data.adminPending }
-            : { pending: data.adminPending, sellers: 0, suspended: 0, admins: 0, totalUsers: 0, totalDishes: 0, totalOrders: 0, orphanDishes: 0 });
+            : { pending: data.adminPending, sellers: 0, suspended: 0, admins: 0, totalUsers: 0, totalDishes: 0, totalOrders: 0, orphanDishes: 0, openBugs: 0 });
         }
 
         // Orders: refetch only when the version string moved
@@ -1858,8 +1918,9 @@ export default function Home() {
     if (screen === 'admin-pending') loadAdminPending();
     if (screen === 'admin-users') loadAdminUsers();
     if (screen === 'admin-dishes') loadAdminDishes();
+    if (screen === 'admin-bugs') loadAdminBugs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, adminUserFilter, adminUserSearch, adminDishSearch]);
+  }, [screen, adminUserFilter, adminUserSearch, adminDishSearch, adminBugFilter]);
 
   // Auto-scroll to bottom of chat when new messages arrive
   useEffect(() => {
@@ -4295,6 +4356,16 @@ export default function Home() {
               </div>
             )}
 
+            {/* Report a bug */}
+            <div style={{ background: C.card, padding: 14, borderRadius: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              <button onClick={() => setShowBugSheet(true)} style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 0, background: 'transparent' }}>
+                <span style={{ font: `400 14px ${font.sans}`, color: C.inkSoft, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Bug size={16} /> Report a bug
+                </span>
+                <span style={{ font: `500 13px ${font.sans}`, color: C.terracotta }}>›</span>
+              </button>
+            </div>
+
             {/* Legal footer */}
             <div style={{ padding: '18px 0 0', display: 'flex', gap: 14, justifyContent: 'center', font: `400 11.5px ${font.sans}`, color: C.muted }}>
               <a href="/terms" style={{ color: C.muted, textDecoration: 'none' }}>Terms</a>
@@ -5712,6 +5783,16 @@ export default function Home() {
                 </div>
                 <ChevronRight size={16} color={C.muted} />
               </button>
+              <button onClick={() => setScreen('admin-bugs')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderTop: `1px solid ${C.hairline}` }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: adminStats && adminStats.openBugs > 0 ? C.terracottaLight : C.cardAlt, color: adminStats && adminStats.openBugs > 0 ? C.terracotta : C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Bug size={17} />
+                </div>
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Bug reports</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>{adminStats?.openBugs ?? 0} open</div>
+                </div>
+                <ChevronRight size={16} color={C.muted} />
+              </button>
             </div>
 
             <div style={{ font: `400 11px ${font.sans}`, color: C.muted, textAlign: 'center', marginTop: 20 }}>
@@ -6528,6 +6609,95 @@ export default function Home() {
                 style={{ width: '100%', padding: 14, background: C.terracotta, color: '#fff', borderRadius: 14, font: `500 14px ${font.sans}`, marginTop: 18 }}
               >
                 Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ================= ADMIN: BUG REPORTS ================= */}
+        {screen === 'admin-bugs' && user.role === 'admin' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Bug reports</div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              {([
+                { key: 'open', label: 'Open' },
+                { key: 'resolved', label: 'Resolved' },
+                { key: 'all', label: 'All' },
+              ] as const).map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setAdminBugFilter(f.key)}
+                  style={{ padding: '6px 14px', background: adminBugFilter === f.key ? C.ink : C.card, color: adminBugFilter === f.key ? '#fff' : C.inkSoft, border: `1px solid ${adminBugFilter === f.key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}` }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminBugs.map((b: any) => (
+                <div key={b.id} style={{ background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)', opacity: b.status === 'resolved' ? .65 : 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>
+                      {b.reporter_name}{b.reporter_email ? ` · ${b.reporter_email}` : ''}{b.screen ? ` · on ${b.screen}` : ''} · {timeAgo(b.created_at)}
+                    </div>
+                    <span style={{ flex: 'none', padding: '2px 8px', borderRadius: 8, font: `500 10px ${font.sans}`, background: b.status === 'open' ? C.terracottaLight : C.greenLight, color: b.status === 'open' ? C.terracotta : C.green }}>
+                      {b.status}
+                    </span>
+                  </div>
+                  <div style={{ font: `400 13.5px/1.5 ${font.sans}`, color: C.ink, whiteSpace: 'pre-wrap' }}>{b.body}</div>
+                  <button
+                    onClick={() => setBugStatus(b.id, b.status === 'open' ? 'resolved' : 'open')}
+                    style={{ marginTop: 10, padding: '7px 14px', background: b.status === 'open' ? C.greenLight : C.cardAlt, color: b.status === 'open' ? C.green : C.inkSoft, borderRadius: 8, font: `500 12px ${font.sans}` }}
+                  >
+                    {b.status === 'open' ? 'Mark resolved' : 'Reopen'}
+                  </button>
+                </div>
+              ))}
+              {adminBugs.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No {adminBugFilter === 'all' ? '' : adminBugFilter + ' '}reports. 🎉
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= REPORT A BUG SHEET ================= */}
+        {showBugSheet && (
+          <div
+            onClick={() => setShowBugSheet(false)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(30,15,5,0.55)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1400, animation: 'plfade .25s ease' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ background: C.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: '20px 22px 24px', width: '100%', maxWidth: 430, boxShadow: '0 -8px 30px rgba(0,0,0,.2)' }}
+            >
+              <div style={{ width: 44, height: 4, background: C.divider, borderRadius: 2, margin: '0 auto 14px' }} />
+              <div style={{ font: `500 18px ${font.serif}`, color: C.ink, marginBottom: 4 }}>Report a bug</div>
+              <div style={{ font: `400 12.5px ${font.sans}`, color: C.muted, marginBottom: 14 }}>
+                What went wrong? Where were you in the app, what did you expect, what happened instead?
+              </div>
+              <textarea
+                value={bugText}
+                onChange={(e) => setBugText(e.target.value)}
+                rows={5}
+                maxLength={2000}
+                placeholder="e.g. When I tapped Withdraw on my earnings, nothing happened…"
+                style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 12, font: `400 14px/1.5 ${font.sans}`, background: '#fff', resize: 'none', fontFamily: font.sans }}
+              />
+              <button
+                onClick={submitBugReport}
+                disabled={bugSubmitting}
+                style={{ width: '100%', padding: 14, background: bugSubmitting ? C.cardAlt : C.terracotta, color: bugSubmitting ? C.muted : '#fff', borderRadius: 14, font: `500 14px ${font.sans}`, marginTop: 14 }}
+              >
+                {bugSubmitting ? 'Sending…' : 'Send report'}
               </button>
             </div>
           </div>

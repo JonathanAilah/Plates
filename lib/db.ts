@@ -54,6 +54,19 @@ async function runMigrations(): Promise<void> {
     // Live-location opt-out. When false, the stored coords are cleared and
     // updateUserLocation refuses new writes until the user re-shares.
     await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS location_sharing BOOLEAN DEFAULT true`;
+
+    // In-app bug reports (Profile -> Report a bug; triaged in Admin)
+    await sql`
+      CREATE TABLE IF NOT EXISTS bug_reports (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        body TEXT NOT NULL,
+        screen TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_bug_reports_status ON bug_reports(status, created_at DESC)`;
     await sql`
       UPDATE users SET kitchen_latitude = latitude, kitchen_longitude = longitude
       WHERE prep_address IS NOT NULL AND kitchen_latitude IS NULL AND latitude IS NOT NULL
@@ -403,6 +416,44 @@ export async function updateUserLocation(id: number, latitude: number, longitude
   if (result.rows[0]) return result.rows[0];
   const unchanged = await sql`SELECT * FROM users WHERE id = ${id} LIMIT 1`;
   return unchanged.rows[0];
+}
+
+// ============= BUG REPORTS =============
+
+export async function createBugReport(userId: number, body: string, screen: string | null) {
+  const trimmed = body.trim().slice(0, 2000);
+  if (trimmed.length < 5) {
+    const e: any = new Error('Tell us a little more — at least a sentence');
+    e.status = 400;
+    throw e;
+  }
+  const result = await sql`
+    INSERT INTO bug_reports (user_id, body, screen)
+    VALUES (${userId}, ${trimmed}, ${screen ? screen.slice(0, 50) : null})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getBugReports(status: string | null = null) {
+  const rows = status
+    ? await sql`
+        SELECT b.*, COALESCE(u.name, 'Deleted user') as reporter_name, u.email as reporter_email
+        FROM bug_reports b LEFT JOIN users u ON u.id = b.user_id
+        WHERE b.status = ${status}
+        ORDER BY b.created_at DESC LIMIT 200`
+    : await sql`
+        SELECT b.*, COALESCE(u.name, 'Deleted user') as reporter_name, u.email as reporter_email
+        FROM bug_reports b LEFT JOIN users u ON u.id = b.user_id
+        ORDER BY b.created_at DESC LIMIT 200`;
+  return rows.rows;
+}
+
+export async function setBugReportStatus(id: number, status: 'open' | 'resolved') {
+  const result = await sql`
+    UPDATE bug_reports SET status = ${status} WHERE id = ${id} RETURNING *
+  `;
+  return result.rows[0];
 }
 
 // Toggle live-location sharing. Turning it OFF also erases the stored
@@ -944,6 +995,7 @@ export async function deleteUserCompletely(userId: number): Promise<{
   await sql`DELETE FROM messages      WHERE sender_id = ${userId}`;
   await sql`DELETE FROM pickup_hours  WHERE user_id = ${userId}`;
   await sql`DELETE FROM push_subscriptions WHERE user_id = ${userId}`;
+  await sql`DELETE FROM bug_reports  WHERE user_id = ${userId}`;
 
   // 7. Delete their dishes and posts. Their orders keep dangling dish ids;
   //    order lists LEFT JOIN dishes and label those rows "Deleted dish".
@@ -1545,6 +1597,8 @@ export async function getAdminStats() {
   const totalOrders = await sql`SELECT COUNT(*)::int as c FROM orders`;
   const orphanDishes = await sql`SELECT COUNT(*)::int as c FROM dishes WHERE photo_url IS NULL`;
 
+  const openBugs = await sql`SELECT COUNT(*)::int as c FROM bug_reports WHERE status = 'open'`;
+
   return {
     pending: pending.rows[0].c,
     sellers: sellers.rows[0].c,
@@ -1554,6 +1608,7 @@ export async function getAdminStats() {
     totalDishes: totalDishes.rows[0].c,
     totalOrders: totalOrders.rows[0].c,
     orphanDishes: orphanDishes.rows[0].c,
+    openBugs: openBugs.rows[0].c,
   };
 }
 

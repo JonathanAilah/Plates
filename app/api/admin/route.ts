@@ -21,6 +21,8 @@ import {
   getAllOrdersForAdmin,
   getAllCooksForAdminPayouts,
   getCookPayoutDetail,
+  getBugReports,
+  setBugReportStatus,
 } from '@/lib/db';
 
 function errorResponse(error: any) {
@@ -76,6 +78,12 @@ export async function GET(request: NextRequest) {
       const search = searchParams.get('search') || undefined;
       const dishes = await getAllDishesForAdmin(search);
       return NextResponse.json(dishes);
+    }
+
+    if (action === 'bugReports') {
+      const status = searchParams.get('status');
+      const reports = await getBugReports(status === 'open' || status === 'resolved' ? status : null);
+      return NextResponse.json(reports);
     }
 
     // Financial drill-down: behind each Financials card.
@@ -136,6 +144,13 @@ export async function POST(request: NextRequest) {
     const me = await requireAdmin();
     const body = await request.json();
     const { action, userId, dishId, reason } = body;
+
+    if (action === 'setBugStatus') {
+      const status = body.status === 'resolved' ? 'resolved' : 'open';
+      const report = await setBugReportStatus(parseInt(body.reportId), status);
+      if (!report) return NextResponse.json({ error: 'Report not found' }, { status: 404 });
+      return NextResponse.json(report);
+    }
 
     if (action === 'updateSettings') {
       const settings = await updatePlatformSettings(body.settings || {});
