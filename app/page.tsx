@@ -484,6 +484,10 @@ export default function Home() {
   const [messageDraft, setMessageDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [unreadByOrder, setUnreadByOrder] = useState<Record<string, number>>({});
+  // Change-detector bookkeeping for the consolidated /api/sync poll
+  const syncOrdersVersion = useRef<string | null>(null);
+  const syncChatVersion = useRef<string | null>(null);
+  const lastSyncAt = useRef(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [generatingPhotoFor, setGeneratingPhotoFor] = useState<number | null>(null);
   const [confirmingPickupFor, setConfirmingPickupFor] = useState<string | null>(null);
@@ -614,19 +618,6 @@ export default function Home() {
     }
   };
 
-  const loadUnreadCounts = async (userId: number) => {
-    try {
-      const res = await fetch(`/api/messages?action=unreadCounts&userId=${userId}`);
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        const map: Record<string, number> = {};
-        for (const row of data) map[row.order_id] = row.unread;
-        setUnreadByOrder(map);
-      }
-    } catch (e) {
-      console.error('Unread counts error:', e);
-    }
-  };
 
   // ============ ADMIN LOADERS ============
 
@@ -1323,29 +1314,87 @@ export default function Home() {
     }
   }, [screen, user?.seller_status]);
 
-  // Poll orders when on orders / order-detail / kitchen-queue screens
+  // ============= CONSOLIDATED SYNC POLLING =============
+  // One adaptive loop replaces the old separate pollers (orders every 5s,
+  // unread every 10s, admin stats every 15s). Each tick is a single cheap
+  // request to /api/sync that returns unread counts plus change-detector
+  // versions; full order/message data is refetched ONLY when a version
+  // actually changed. Cadence adapts to what the user is looking at:
+  // chat 5s, order screens 10s, everything else 30s.
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
+
     const isBuyerView = screen === 'orders' || screen === 'order-detail';
     const isCookView = screen === 'kitchen-queue';
     const isChatView = screen === 'chat';
-    if (!isBuyerView && !isCookView && !isChatView) return;
 
-    // Refresh immediately when the screen opens
+    // Refresh immediately when a data screen opens (unchanged behavior)
     if (isBuyerView) loadOrders(user.id);
     if (isCookView) loadCookOrders(user.id);
     if (isChatView && chatOrder) loadMessages(chatOrder.id, user.id);
 
+    // Chat version tracker resets per opened chat
+    syncChatVersion.current = null;
+
+    const syncNow = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (isChatView && chatOrder) params.set('chatOrderId', chatOrder.id);
+        const qs = params.toString();
+        const res = await fetch(`/api/sync${qs ? `?${qs}` : ''}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled) return;
+
+        // Unread badges (previously its own 10s poll)
+        if (Array.isArray(data.unread)) {
+          const map: Record<string, number> = {};
+          for (const row of data.unread) map[row.order_id] = row.unread;
+          setUnreadByOrder(map);
+        }
+
+        // Admin pending banner (previously a full 8-query stats poll every 15s)
+        if (data.adminPending != null) {
+          setAdminStats(prev => prev
+            ? { ...prev, pending: data.adminPending }
+            : { pending: data.adminPending, sellers: 0, suspended: 0, admins: 0, totalUsers: 0, totalDishes: 0, totalOrders: 0, orphanDishes: 0 });
+        }
+
+        // Orders: refetch only when the version string moved
+        if (data.ordersVersion) {
+          const changed = syncOrdersVersion.current !== null && syncOrdersVersion.current !== data.ordersVersion;
+          syncOrdersVersion.current = data.ordersVersion;
+          if (changed) {
+            if (isBuyerView) loadOrders(user.id);
+            if (isCookView) loadCookOrders(user.id);
+          }
+        }
+
+        // Chat: refetch only when a new message actually exists
+        if (data.chatVersion && isChatView && chatOrder) {
+          const changed = syncChatVersion.current !== null && syncChatVersion.current !== data.chatVersion;
+          syncChatVersion.current = data.chatVersion;
+          if (changed) {
+            loadMessages(chatOrder.id, user.id);
+            markThreadRead(chatOrder.id, user.id);
+          }
+        }
+      } catch { /* transient network error — next tick retries */ }
+    };
+
+    lastSyncAt.current = Date.now();
+    syncNow();
+
     const interval = setInterval(() => {
       if (document.hidden) return; // Save battery when tab isn't visible
-      if (screen === 'orders' || screen === 'order-detail') loadOrders(user.id);
-      if (screen === 'kitchen-queue') loadCookOrders(user.id);
-      if (screen === 'chat' && chatOrder) {
-        loadMessages(chatOrder.id, user.id);
-        markThreadRead(chatOrder.id, user.id);
+      const intervalMs = isChatView ? 5000 : (isBuyerView || isCookView) ? 10000 : 30000;
+      if (Date.now() - lastSyncAt.current >= intervalMs - 250) {
+        lastSyncAt.current = Date.now();
+        syncNow();
       }
     }, 5000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, user?.id, chatOrder?.id]);
 
@@ -1365,17 +1414,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, homeTab, feedLat, feedLng, feedRadiusMi]);
 
-  // Background unread-count polling (any screen, so badges appear in nav / order lists)
-  useEffect(() => {
-    if (!user) return;
-    loadUnreadCounts(user.id);
-    const interval = setInterval(() => {
-      if (document.hidden) return;
-      loadUnreadCounts(user.id);
-    }, 10000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
 
   // Clamp pickup duration whenever the cart changes so it stays within cook bounds
   useEffect(() => {
@@ -1390,17 +1428,6 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart]);
 
-  // Admin: poll pending count so a red banner appears when new sellers submit
-  useEffect(() => {
-    if (!user || user.role !== 'admin') return;
-    loadAdminStats();
-    const interval = setInterval(() => {
-      if (document.hidden) return;
-      loadAdminStats();
-    }, 15000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.role]);
 
   // Load specific admin data when opening admin screens
   useEffect(() => {

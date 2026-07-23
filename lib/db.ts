@@ -1054,6 +1054,39 @@ export async function getUnreadCounts(userId: number) {
   return result.rows;
 }
 
+// ============= SYNC (cheap change detectors for client polling) =============
+// These return opaque version strings the client compares between polls.
+// A changed version means "refetch the real data"; an unchanged one means
+// the poll cost was a single tiny indexed aggregate instead of a full fetch.
+
+export async function getOrdersVersion(userId: number): Promise<string> {
+  const result = await sql`
+    SELECT COUNT(*)::int AS count, COALESCE(MAX(o.updated_at)::text, '') AS latest
+    FROM orders o
+    JOIN dishes d ON o.dish_id = d.id
+    WHERE o.buyer_id = ${userId} OR d.seller_id = ${userId}
+  `;
+  const row = result.rows[0];
+  return `${row.count}:${row.latest}`;
+}
+
+export async function getMessagesVersion(orderId: string): Promise<string> {
+  const result = await sql`
+    SELECT COUNT(*)::int AS count, COALESCE(MAX(id), 0)::int AS latest
+    FROM messages WHERE order_id = ${orderId}
+  `;
+  const row = result.rows[0];
+  return `${row.count}:${row.latest}`;
+}
+
+export async function getPendingSellersCount(): Promise<number> {
+  const result = await sql`
+    SELECT COUNT(*)::int AS c FROM users
+    WHERE seller_status = 'pending' AND account_disabled = false
+  `;
+  return result.rows[0].c;
+}
+
 // ============= ADMIN =============
 
 export async function submitSellerForReview(userId: number) {
