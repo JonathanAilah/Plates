@@ -9,7 +9,10 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const settings = await getPlatformSettings();
-    return NextResponse.json(settings);
+    // Explicit no-store: pricing can change from the admin panel at any time,
+    // and this response must never be served stale from an intermediate
+    // cache (browser, CDN) to a tab that's been open a while.
+    return NextResponse.json(settings, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('Settings GET error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
