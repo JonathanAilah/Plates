@@ -161,6 +161,54 @@ async function runMigrations(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_reviews_dish ON dish_reviews(dish_id, created_at DESC)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_reviews_buyer ON dish_reviews(buyer_id)`;
 
+    // Cached rating aggregates on dishes, so browsing/searching doesn't
+    // re-aggregate the whole dish_reviews table on every request. A trigger
+    // keeps these exact across inserts, edits, deletes, and cascade deletes.
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS rating_sum INTEGER NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS rating_count INTEGER NOT NULL DEFAULT 0`;
+    await sql`
+      CREATE OR REPLACE FUNCTION plates_sync_dish_rating() RETURNS TRIGGER AS $$
+      BEGIN
+        IF (TG_OP = 'INSERT') THEN
+          UPDATE dishes SET rating_sum = rating_sum + NEW.rating, rating_count = rating_count + 1
+            WHERE id = NEW.dish_id;
+        ELSIF (TG_OP = 'DELETE') THEN
+          UPDATE dishes SET rating_sum = rating_sum - OLD.rating, rating_count = rating_count - 1
+            WHERE id = OLD.dish_id;
+        ELSIF (TG_OP = 'UPDATE') THEN
+          IF (NEW.dish_id = OLD.dish_id) THEN
+            UPDATE dishes SET rating_sum = rating_sum + (NEW.rating - OLD.rating)
+              WHERE id = NEW.dish_id;
+          ELSE
+            UPDATE dishes SET rating_sum = rating_sum - OLD.rating, rating_count = rating_count - 1
+              WHERE id = OLD.dish_id;
+            UPDATE dishes SET rating_sum = rating_sum + NEW.rating, rating_count = rating_count + 1
+              WHERE id = NEW.dish_id;
+          END IF;
+        END IF;
+        RETURN NULL;
+      END;
+      $$ LANGUAGE plpgsql;
+    `;
+    await sql`DROP TRIGGER IF EXISTS trg_sync_dish_rating ON dish_reviews`;
+    await sql`
+      CREATE TRIGGER trg_sync_dish_rating
+      AFTER INSERT OR UPDATE OR DELETE ON dish_reviews
+      FOR EACH ROW EXECUTE FUNCTION plates_sync_dish_rating()
+    `;
+    // Backfill from the source of truth (idempotent — recomputes to the same values).
+    await sql`
+      UPDATE dishes d SET
+        rating_sum = COALESCE(s.sum, 0),
+        rating_count = COALESCE(s.cnt, 0)
+      FROM (
+        SELECT dish_id, SUM(rating)::int AS sum, COUNT(*)::int AS cnt
+        FROM dish_reviews GROUP BY dish_id
+      ) s
+      WHERE s.dish_id = d.id
+        AND (d.rating_sum <> COALESCE(s.sum, 0) OR d.rating_count <> COALESCE(s.cnt, 0))
+    `;
+
     // Community feed: ephemeral posts (24hr TTL)
     await sql`
       CREATE TABLE IF NOT EXISTS posts (
@@ -405,15 +453,11 @@ export async function getDishes(opts: GetDishesOptions = {}) {
            u.cooking_hours as seller_cooking_hours,
            u.pickup_min_minutes as seller_pickup_min_minutes,
            u.pickup_max_minutes as seller_pickup_max_minutes,
-           COALESCE(r.avg_rating, 0) as avg_rating,
-           COALESCE(r.review_count, 0)::int as review_count,
+           COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
+           d.rating_count as review_count,
            (${distanceSelect}) as distance_miles
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
-    LEFT JOIN (
-      SELECT dish_id, ROUND(AVG(rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
-      FROM dish_reviews GROUP BY dish_id
-    ) r ON r.dish_id = d.id
     WHERE u.seller_status = 'approved'
       AND u.account_disabled = false
       ${locFilter}
@@ -436,14 +480,10 @@ export async function getDishes(opts: GetDishesOptions = {}) {
 export async function getDish(id: number) {
   const result = await sql`
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.id as seller_id,
-           COALESCE(r.avg_rating, 0) as avg_rating,
-           COALESCE(r.review_count, 0)::int as review_count
+           COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
+           d.rating_count as review_count
     FROM dishes d
     JOIN users u ON d.seller_id = u.id
-    LEFT JOIN (
-      SELECT dish_id, ROUND(AVG(rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
-      FROM dish_reviews GROUP BY dish_id
-    ) r ON r.dish_id = d.id
     WHERE d.id = ${id}
   `;
   return result.rows[0];
@@ -1624,24 +1664,20 @@ export async function getCookPublicProfile(userId: number) {
   const dishesResult = await sql`
     SELECT d.id, d.name, d.description, d.price, d.emoji, d.photo_url, d.likes,
            d.is_featured, d.created_at,
-           COALESCE(r.avg_rating, 0) as avg_rating,
-           COALESCE(r.review_count, 0)::int as review_count
+           COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
+           d.rating_count as review_count
     FROM dishes d
-    LEFT JOIN (
-      SELECT dish_id, ROUND(AVG(rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
-      FROM dish_reviews GROUP BY dish_id
-    ) r ON r.dish_id = d.id
     WHERE d.seller_id = ${userId}
       AND (d.is_hidden_from_profile IS DISTINCT FROM true)
     ORDER BY d.is_featured DESC, d.created_at DESC
   `;
 
-  // Aggregate rating across all their dishes
+  // Aggregate rating across all their dishes, from the cached per-dish totals.
   const aggResult = await sql`
-    SELECT ROUND(AVG(r.rating)::numeric, 1) as avg_rating, COUNT(*)::int as review_count
-    FROM dish_reviews r
-    JOIN dishes d ON r.dish_id = d.id
-    WHERE d.seller_id = ${userId}
+    SELECT ROUND(SUM(rating_sum)::numeric / NULLIF(SUM(rating_count), 0), 1) as avg_rating,
+           COALESCE(SUM(rating_count), 0)::int as review_count
+    FROM dishes
+    WHERE seller_id = ${userId}
   `;
   const agg = aggResult.rows[0] || { avg_rating: null, review_count: 0 };
 
