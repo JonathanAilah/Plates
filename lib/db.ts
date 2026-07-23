@@ -279,6 +279,20 @@ async function runMigrations(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders(buyer_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_dish_id ON orders(dish_id)`;
 
+    // Platform-wide pricing knobs, editable from the admin dashboard.
+    // Single row (id = 1); percent values are stored as percentages (5 = 5%).
+    await sql`
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        tax_percent DECIMAL(5, 2) NOT NULL DEFAULT 0,
+        service_fee_percent DECIMAL(5, 2) NOT NULL DEFAULT 5,
+        service_fee_min DECIMAL(6, 2) NOT NULL DEFAULT 0.50,
+        default_tip DECIMAL(6, 2) NOT NULL DEFAULT 3,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
+
     console.log('✓ Database initialized successfully');
   } catch (error) {
     if (error instanceof Error && error.message.includes('already exists')) {
@@ -1052,6 +1066,68 @@ export async function getUnreadCounts(userId: number) {
     HAVING COUNT(m.id) > 0
   `;
   return result.rows;
+}
+
+// ============= PLATFORM SETTINGS (admin-editable pricing) =============
+
+export interface PlatformSettings {
+  taxPercent: number;        // % of subtotal, collected by the platform
+  serviceFeePercent: number; // % of subtotal, collected by the platform
+  serviceFeeMin: number;     // $ floor for the service fee
+  defaultTip: number;        // $ pre-filled tip (buyer can edit at checkout)
+}
+
+const DEFAULT_PLATFORM_SETTINGS: PlatformSettings = {
+  taxPercent: 0,
+  serviceFeePercent: 5,
+  serviceFeeMin: 0.5,
+  defaultTip: 3,
+};
+
+export async function getPlatformSettings(): Promise<PlatformSettings> {
+  try {
+    const result = await sql`
+      SELECT tax_percent, service_fee_percent, service_fee_min, default_tip
+      FROM platform_settings WHERE id = 1
+    `;
+    const row = result.rows[0];
+    if (!row) return DEFAULT_PLATFORM_SETTINGS;
+    return {
+      taxPercent: Number(row.tax_percent),
+      serviceFeePercent: Number(row.service_fee_percent),
+      serviceFeeMin: Number(row.service_fee_min),
+      defaultTip: Number(row.default_tip),
+    };
+  } catch {
+    // Table may not exist yet on a fresh deploy before the migration runs.
+    return DEFAULT_PLATFORM_SETTINGS;
+  }
+}
+
+function clampNum(value: unknown, lo: number, hi: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, Math.round(n * 100) / 100));
+}
+
+export async function updatePlatformSettings(input: Partial<PlatformSettings>): Promise<PlatformSettings> {
+  const current = await getPlatformSettings();
+  const next: PlatformSettings = {
+    taxPercent: clampNum(input.taxPercent, 0, 30, current.taxPercent),
+    serviceFeePercent: clampNum(input.serviceFeePercent, 0, 30, current.serviceFeePercent),
+    serviceFeeMin: clampNum(input.serviceFeeMin, 0, 10, current.serviceFeeMin),
+    defaultTip: clampNum(input.defaultTip, 0, 50, current.defaultTip),
+  };
+  await sql`
+    UPDATE platform_settings SET
+      tax_percent = ${next.taxPercent},
+      service_fee_percent = ${next.serviceFeePercent},
+      service_fee_min = ${next.serviceFeeMin},
+      default_tip = ${next.defaultTip},
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = 1
+  `;
+  return next;
 }
 
 // ============= SYNC (cheap change detectors for client polling) =============
