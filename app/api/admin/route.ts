@@ -18,6 +18,9 @@ import {
   getAdminFinancials,
   deleteUserCompletely,
   updatePlatformSettings,
+  getAllOrdersForAdmin,
+  getAllCooksForAdminPayouts,
+  getCookPayoutDetail,
 } from '@/lib/db';
 
 function errorResponse(error: any) {
@@ -73,6 +76,52 @@ export async function GET(request: NextRequest) {
       const search = searchParams.get('search') || undefined;
       const dishes = await getAllDishesForAdmin(search);
       return NextResponse.json(dishes);
+    }
+
+    // Financial drill-down: behind each Financials card.
+    if (action === 'ordersList') {
+      const num = (v: string | null): number | undefined => {
+        if (v == null) return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const orders = await getAllOrdersForAdmin({
+        search: searchParams.get('search'),
+        status: searchParams.get('status'),
+        limit: num(searchParams.get('limit')),
+        offset: num(searchParams.get('offset')),
+      });
+      return NextResponse.json(orders);
+    }
+
+    if (action === 'cooksPayouts') {
+      const num = (v: string | null): number | undefined => {
+        if (v == null) return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const cooks = await getAllCooksForAdminPayouts({
+        search: searchParams.get('search'),
+        limit: num(searchParams.get('limit')),
+        offset: num(searchParams.get('offset')),
+      });
+      return NextResponse.json(cooks);
+    }
+
+    if (action === 'cookPayoutDetail') {
+      const cookId = parseInt(searchParams.get('cookId') || '0');
+      if (!cookId) return NextResponse.json({ error: 'cookId required' }, { status: 400 });
+      const num = (v: string | null): number | undefined => {
+        if (v == null) return undefined;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const detail = await getCookPayoutDetail(cookId, {
+        pastLimit: num(searchParams.get('pastLimit')),
+        pastOffset: num(searchParams.get('pastOffset')),
+      });
+      if (!detail) return NextResponse.json({ error: 'Cook not found' }, { status: 404 });
+      return NextResponse.json(detail);
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
