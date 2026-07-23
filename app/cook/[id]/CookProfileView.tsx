@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Star, MapPin, Heart, MessageCircle, ChefHat } from 'lucide-react';
+import { ArrowLeft, Star, MapPin, Heart, MessageCircle, ChefHat, Share2 } from 'lucide-react';
 
 // Design tokens — same as main app
 const C = {
@@ -96,6 +96,32 @@ function memberSince(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
 
+// Native share sheet on phones, copy-link fallback on desktop
+function ShareButton({ name, cookId }: { name: string; cookId: number }) {
+  const [copied, setCopied] = useState(false);
+  const share = async () => {
+    const url = `${window.location.origin}/cook/${cookId}`;
+    const data = { title: `${name} on Plates`, text: `Homemade meals from ${name} — order on Plates.`, url };
+    if (navigator.share) {
+      try { await navigator.share(data); } catch { /* dismissed */ }
+    } else {
+      try {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch { /* clipboard unavailable */ }
+    }
+  };
+  return (
+    <button onClick={share} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink, border: 'none', cursor: 'pointer', position: 'relative' }}>
+      <Share2 size={16} />
+      {copied && (
+        <span style={{ position: 'absolute', top: 40, right: 0, background: C.ink, color: '#fff', padding: '4px 10px', borderRadius: 8, font: `500 11px ${font.sans}`, whiteSpace: 'nowrap' }}>Link copied!</span>
+      )}
+    </button>
+  );
+}
+
 export default function CookProfileView({ profile }: { profile: CookProfileData }) {
   const { cook, dishes, aggregateRating, posts } = profile;
   const cateringDishes = profile.cateringDishes || [];
@@ -110,7 +136,8 @@ export default function CookProfileView({ profile }: { profile: CookProfileData 
           <Link href="/" style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink, textDecoration: 'none' }}>
             <ArrowLeft size={18} />
           </Link>
-          <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Cook</div>
+          <div style={{ flex: 1, font: `500 22px ${font.serif}`, color: C.ink }}>Cook</div>
+          <ShareButton name={displayName} cookId={cook.id} />
         </div>
 
         {/* Cook card */}

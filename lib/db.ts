@@ -556,6 +556,24 @@ export async function getDishes(opts: GetDishesOptions = {}) {
   return result.rows;
 }
 
+// Public dish lookup for the shareable /meal/[id] page: only returns dishes
+// whose cook is approved and active (mirrors the marketplace rules).
+export async function getDishPublic(id: number) {
+  const result = await sql`
+    SELECT d.id, d.name, d.description, d.price, d.emoji, d.photo_url,
+           d.is_catering, d.sides, d.sell_start, d.sell_end, d.likes,
+           COALESCE(ROUND(d.rating_sum::numeric / NULLIF(d.rating_count, 0), 1), 0) as avg_rating,
+           d.rating_count as review_count,
+           u.id as seller_id, u.name as seller_name, u.kitchen_name as seller_kitchen_name,
+           u.avatar as seller_avatar, u.photo_url as seller_photo_url
+    FROM dishes d
+    JOIN users u ON d.seller_id = u.id
+    WHERE d.id = ${id} AND u.seller_status = 'approved' AND u.account_disabled = false
+    LIMIT 1
+  `;
+  return result.rows[0] || null;
+}
+
 export async function getDish(id: number) {
   const result = await sql`
     SELECT d.*, u.name as seller_name, u.avatar as seller_avatar, u.id as seller_id,
