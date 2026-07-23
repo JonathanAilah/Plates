@@ -444,11 +444,24 @@ export default function Home() {
   // intro the moment Clerk confirms the visitor is signed in.
   const [showWelcome, setShowWelcome] = useState(false);
   const [welcomeChoice, setWelcomeChoice] = useState<'kitchen' | 'feed' | null>(null);
+  // Mirror of welcomeChoice for the sync loop's closure (auto-dismiss must
+  // never override a choice the user already tapped).
+  const welcomeChoiceRef = useRef<'kitchen' | 'feed' | null>(null);
 
   useEffect(() => {
     if (!isLoaded) return;
     if (isSignedIn) {
       setShowIntro(false);
+      // Show at most once per day, and not when the user is mid-order (per
+      // the active-order snapshot from their last session — the live sync
+      // check below also dismisses if a fresh active order turns up).
+      try {
+        const today = new Date().toDateString();
+        if (window.localStorage.getItem('plates_welcome_last_shown') === today) return;
+        const activeSnapshot = parseInt(window.localStorage.getItem('plates_active_orders') || '0', 10);
+        if (activeSnapshot > 0) return;
+        window.localStorage.setItem('plates_welcome_last_shown', today);
+      } catch { /* storage unavailable — just show it */ }
       setShowWelcome(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -458,9 +471,11 @@ export default function Home() {
     setScreen(dest === 'kitchen' ? 'seller-dashboard' : 'feed');
     setShowWelcome(false);
     setWelcomeChoice(null);
+    welcomeChoiceRef.current = null;
   };
 
   const handleWelcomeChoose = (dest: 'kitchen' | 'feed') => {
+    welcomeChoiceRef.current = dest;
     if (loading) {
       // App still booting — remember the choice; the effect below routes
       // the moment data is in. The overlay shows "Setting the table…".
@@ -1682,6 +1697,16 @@ export default function Home() {
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled) return;
+
+        // Active-order tracking for the welcome fork: snapshot for the next
+        // visit's instant decision, and dismiss the fork mid-splash if a
+        // live active order turns up (unless the user already chose a path).
+        if (typeof data.activeOrders === 'number') {
+          try { window.localStorage.setItem('plates_active_orders', String(data.activeOrders)); } catch {}
+          if (data.activeOrders > 0 && !welcomeChoiceRef.current) {
+            setShowWelcome(false);
+          }
+        }
 
         // Unread badges (previously its own 10s poll)
         if (Array.isArray(data.unread)) {
