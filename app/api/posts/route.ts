@@ -67,8 +67,8 @@ export async function POST(request: NextRequest) {
       if (!postId) return NextResponse.json({ error: 'postId required' }, { status: 400 });
       const post = await getPost(postId);
       if (!post) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-      // Only the author OR an admin can delete
-      if (post.user_id !== me.id && me.role !== 'admin') {
+      // Only the author OR an admin (chief or secondary) can delete
+      if (post.user_id !== me.id && me.role !== 'admin' && me.role !== 'secondary_admin') {
         return NextResponse.json({ error: 'Not your post' }, { status: 403 });
       }
       await deletePost(postId);
@@ -99,8 +99,8 @@ export async function POST(request: NextRequest) {
       if (!commentId) return NextResponse.json({ error: 'commentId required' }, { status: 400 });
       const authorId = await getCommentAuthor(commentId);
       if (authorId == null) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-      // Comment author OR admin can delete
-      if (authorId !== me.id && me.role !== 'admin') {
+      // Comment author OR admin (chief or secondary) can delete
+      if (authorId !== me.id && me.role !== 'admin' && me.role !== 'secondary_admin') {
         return NextResponse.json({ error: 'Not your comment' }, { status: 403 });
       }
       await deleteComment(commentId);

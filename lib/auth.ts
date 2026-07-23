@@ -44,11 +44,30 @@ export async function requireSessionUser() {
   return user;
 }
 
-// Guard for admin-only endpoints
+// Guard for admin-only endpoints (chief admin — full access)
 export async function requireAdmin() {
   const user = await requireSessionUser();
   if (user.role !== 'admin') {
     const err: any = new Error('Admin only');
+    err.status = 403;
+    throw err;
+  }
+  return user;
+}
+
+// Staff tiers:
+//   'admin'           — chief admin, sees and does everything
+//   'secondary_admin' — everything except financials, pricing, and role/user management
+//   'support'         — customer service: bug reports only
+export type StaffRole = 'admin' | 'secondary_admin' | 'support';
+export const STAFF_ROLES: StaffRole[] = ['admin', 'secondary_admin', 'support'];
+
+// Guard for endpoints any staff member may reach. Per-action tier checks
+// happen in the route handler using the returned user's role.
+export async function requireStaff() {
+  const user = await requireSessionUser();
+  if (!STAFF_ROLES.includes(user.role)) {
+    const err: any = new Error('Staff only');
     err.status = 403;
     throw err;
   }

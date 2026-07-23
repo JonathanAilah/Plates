@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { del } from '@vercel/blob';
-import { requireAdmin } from '@/lib/auth';
+import { requireStaff } from '@/lib/auth';
 import {
   getPendingSellers,
   getAllUsersForAdmin,
@@ -23,7 +23,13 @@ import {
   getCookPayoutDetail,
   getBugReports,
   setBugReportStatus,
+  getUserRoleById,
 } from '@/lib/db';
+
+// Staff tiers: chief admins ('admin') see everything; secondary admins see
+// everything EXCEPT financials, pricing, and role/user management; support
+// (customer service) only handles bug reports.
+const forbidden = () => NextResponse.json({ error: 'Not authorized for this action' }, { status: 403 });
 
 function errorResponse(error: any) {
   const status = error?.status || 500;
@@ -33,9 +39,18 @@ function errorResponse(error: any) {
 
 export async function GET(request: NextRequest) {
   try {
-    await requireAdmin();
+    const me = await requireStaff();
     const { searchParams } = new URL(request.url);
-    const action = searchParams.get('action');
+    const action = searchParams.get('action') || '';
+
+    const chief = me.role === 'admin';
+    const moderator = chief || me.role === 'secondary_admin';
+    // Financial data is chief-admin only; general moderation data needs at
+    // least secondary admin; bug reports are open to all staff (support).
+    const CHIEF_ONLY = ['financials', 'ordersList', 'cooksPayouts', 'cookPayoutDetail'];
+    const MODERATOR_ONLY = ['stats', 'pending', 'users', 'userDetail', 'userOrders', 'dishes'];
+    if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
+    if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
 
     if (action === 'stats') {
       const stats = await getAdminStats();
@@ -141,9 +156,27 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const me = await requireAdmin();
+    const me = await requireStaff();
     const body = await request.json();
     const { action, userId, dishId, reason } = body;
+
+    const chief = me.role === 'admin';
+    const moderator = chief || me.role === 'secondary_admin';
+    // Pricing and permanent deletion stay with the chief admin — admins can
+    // disable accounts but never delete them. Seller/dish moderation and role
+    // changes need at least admin (setRole is further restricted below). Bug
+    // triage (setBugStatus) is open to all staff, including support.
+    const CHIEF_ONLY = ['updateSettings', 'deleteUser'];
+    const MODERATOR_ONLY = ['approveSeller', 'rejectSeller', 'suspendSeller', 'unsuspendSeller', 'setDisabled', 'deleteDish', 'setRole'];
+    if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
+    if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
+
+    // Admins manage members and support staff — accounts holding an admin or
+    // chief-admin role can only be acted on by the chief.
+    if (!chief && userId && ['setDisabled', 'suspendSeller', 'rejectSeller', 'setRole'].includes(action)) {
+      const targetRole = await getUserRoleById(userId);
+      if (targetRole === 'admin' || targetRole === 'secondary_admin') return forbidden();
+    }
 
     if (action === 'setBugStatus') {
       const status = body.status === 'resolved' ? 'resolved' : 'open';
@@ -192,9 +225,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'setRole') {
-      if (!userId || (body.role !== 'user' && body.role !== 'admin')) {
+      const VALID_ROLES = ['user', 'admin', 'secondary_admin', 'support'];
+      if (!userId || !VALID_ROLES.includes(body.role)) {
         return NextResponse.json({ error: 'userId and valid role required' }, { status: 400 });
       }
+      // Admins may only grant/remove Support — creating admins or chief
+      // admins is reserved for the chief.
+      if (!chief && body.role !== 'user' && body.role !== 'support') return forbidden();
       // Prevent admins from demoting themselves (would lose access mid-session)
       if (userId === me.id && body.role !== 'admin') {
         return NextResponse.json({ error: 'Cannot demote your own account' }, { status: 400 });
