@@ -162,19 +162,20 @@ export async function POST(request: NextRequest) {
 
     const chief = me.role === 'admin';
     const moderator = chief || me.role === 'secondary_admin';
-    // Pricing, roles, and permanent deletion stay with the chief admin.
-    // Seller/dish moderation needs at least secondary admin. Bug triage
-    // (setBugStatus) is open to all staff, including support.
-    const CHIEF_ONLY = ['updateSettings', 'setRole', 'deleteUser'];
-    const MODERATOR_ONLY = ['approveSeller', 'rejectSeller', 'suspendSeller', 'unsuspendSeller', 'setDisabled', 'deleteDish'];
+    // Pricing and permanent deletion stay with the chief admin — admins can
+    // disable accounts but never delete them. Seller/dish moderation and role
+    // changes need at least admin (setRole is further restricted below). Bug
+    // triage (setBugStatus) is open to all staff, including support.
+    const CHIEF_ONLY = ['updateSettings', 'deleteUser'];
+    const MODERATOR_ONLY = ['approveSeller', 'rejectSeller', 'suspendSeller', 'unsuspendSeller', 'setDisabled', 'deleteDish', 'setRole'];
     if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
     if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
 
-    // Secondary admins moderate members, not other staff — only the chief
-    // can act on an account that holds a staff role.
-    if (!chief && userId && ['setDisabled', 'suspendSeller', 'rejectSeller'].includes(action)) {
+    // Admins manage members and support staff — accounts holding an admin or
+    // chief-admin role can only be acted on by the chief.
+    if (!chief && userId && ['setDisabled', 'suspendSeller', 'rejectSeller', 'setRole'].includes(action)) {
       const targetRole = await getUserRoleById(userId);
-      if (targetRole && targetRole !== 'user') return forbidden();
+      if (targetRole === 'admin' || targetRole === 'secondary_admin') return forbidden();
     }
 
     if (action === 'setBugStatus') {
@@ -228,6 +229,9 @@ export async function POST(request: NextRequest) {
       if (!userId || !VALID_ROLES.includes(body.role)) {
         return NextResponse.json({ error: 'userId and valid role required' }, { status: 400 });
       }
+      // Admins may only grant/remove Support — creating admins or chief
+      // admins is reserved for the chief.
+      if (!chief && body.role !== 'user' && body.role !== 'support') return forbidden();
       // Prevent admins from demoting themselves (would lose access mid-session)
       if (userId === me.id && body.role !== 'admin') {
         return NextResponse.json({ error: 'Cannot demote your own account' }, { status: 400 });

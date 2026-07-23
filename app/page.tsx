@@ -14,13 +14,15 @@ const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 const AddressAutocomplete = dynamic(() => import('@/components/AddressAutocomplete'), { ssr: false });
 const CheckoutPayment = dynamic(() => import('@/components/CheckoutPayment'), { ssr: false });
 
-// Staff tiers. Chief admins ('admin') see everything; secondary admins see
-// everything except financials/pricing/role management; support (customer
-// service) only sees bug reports. Server enforces the same rules per action.
+// Staff tiers. The chief admin (role 'admin') sees everything and manages all
+// roles. Admins (role 'secondary_admin') see everything except financials and
+// can create/remove support staff — but never other admins or chiefs, and they
+// can disable accounts but not delete them. Support (customer service) only
+// sees bug reports. The server enforces the same rules per action.
 const isStaffRole = (r?: string | null) => r === 'admin' || r === 'secondary_admin' || r === 'support';
 const isModRole = (r?: string | null) => r === 'admin' || r === 'secondary_admin';
-const ROLE_BADGE: Record<string, string> = { admin: 'ADMIN', secondary_admin: 'SECONDARY ADMIN', support: 'SUPPORT' };
-const ROLE_NAME: Record<string, string> = { user: 'Member', admin: 'Chief admin', secondary_admin: 'Secondary admin', support: 'Customer service' };
+const ROLE_BADGE: Record<string, string> = { admin: 'CHIEF ADMIN', secondary_admin: 'ADMIN', support: 'SUPPORT' };
+const ROLE_NAME: Record<string, string> = { user: 'Member', admin: 'Chief admin', secondary_admin: 'Admin', support: 'Support' };
 
 interface Dish {
   id: number;
@@ -6149,9 +6151,9 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Account controls. Secondary admins moderate members only —
-                  staff accounts and role changes belong to the chief admin. */}
-              {!isMe && (user.role === 'admin' || u.role === 'user') && (
+              {/* Account controls. Admins manage members and support staff;
+                  other admins and the chief are off-limits to them. */}
+              {!isMe && (user.role === 'admin' || u.role === 'user' || u.role === 'support') && (
                 <div style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
                   <div style={{ font: `500 12px ${font.sans}`, color: C.muted, marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Account</div>
 
@@ -6159,18 +6161,20 @@ export default function Home() {
                     {u.account_disabled ? <><UserCheck size={14} /> Re-enable account</> : <><UserX size={14} /> Disable account</>}
                   </button>
 
-                  {user.role === 'admin' && (
+                  {isModRole(user.role) && (
                     <div style={{ marginBottom: 8, padding: 10, background: C.surface, borderRadius: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, font: `500 11.5px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>
                         <Shield size={13} /> Staff role
                       </div>
+                      {/* Admins can only grant/remove Support — creating admins
+                          or chief admins is the chief's call alone. */}
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                         {([
                           { key: 'user', label: 'Member', hint: 'No admin access' },
-                          { key: 'support', label: 'Customer service', hint: 'Bug reports only' },
-                          { key: 'secondary_admin', label: 'Secondary admin', hint: 'All but financials' },
+                          { key: 'support', label: 'Support', hint: 'Bug reports only' },
+                          { key: 'secondary_admin', label: 'Admin', hint: 'All but financials' },
                           { key: 'admin', label: 'Chief admin', hint: 'Full access' },
-                        ] as const).map(r => (
+                        ] as const).filter(r => user.role === 'admin' || r.key === 'user' || r.key === 'support').map(r => (
                           <button
                             key={r.key}
                             onClick={() => u.role !== r.key && adminSetRole(u.id, r.key)}
