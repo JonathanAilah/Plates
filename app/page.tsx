@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star, CreditCard } from 'lucide-react';
+import { Heart, ShoppingBag, ChefHat, Bell, X, Plus, MapPin, Camera, ArrowLeft, Search, Compass, Receipt, User as UserIcon, Minus, Trash2, Map as MapIcon, Navigation, MessageCircle, Send, Sparkles, LogIn, Shield, CheckCircle, XCircle, Pause, Play, UserX, UserCheck, ChevronRight, Star, CreditCard, Share2 } from 'lucide-react';
 import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from '@clerk/nextjs';
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
@@ -1848,6 +1848,28 @@ export default function Home() {
     } catch (error) { console.error(error); }
   };
 
+  // Share a dish's public page (/meal/<id>) via the native share sheet on
+  // phones, or copy the link on desktop. The public page carries the Open
+  // Graph card (photo, name, price) that social apps render.
+  const shareDish = async (dish: Dish) => {
+    const url = `${window.location.origin}/meal/${dish.id}`;
+    const data = {
+      title: `${dish.name} on Plates`,
+      text: `${dish.name} from ${dish.seller_name} — homemade, made to order.`,
+      url,
+    };
+    if (navigator.share) {
+      try { await navigator.share(data); } catch { /* user dismissed */ }
+    } else {
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('Link copied!');
+      } catch {
+        showToast(url);
+      }
+    }
+  };
+
   const openMeal = (dish: Dish) => {
     setSelectedDish(dish);
     setMealQty(1);
@@ -3570,6 +3592,9 @@ export default function Home() {
               </button>
               <button onClick={() => toggleLike(selectedDish.id)} style={{ position: 'absolute', top: 16, right: 16, width: 38, height: 38, borderRadius: '50%', background: 'rgba(255,255,255,.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.terracotta }}>
                 <Heart size={18} fill={selectedDish.liked ? C.terracotta : 'none'} />
+              </button>
+              <button onClick={() => shareDish(selectedDish)} style={{ position: 'absolute', top: 16, right: 62, width: 38, height: 38, borderRadius: '50%', background: 'rgba(255,255,255,.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <Share2 size={17} />
               </button>
             </div>
 
