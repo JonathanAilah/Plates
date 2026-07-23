@@ -106,6 +106,34 @@ export interface MapViewProps {
   interactive?: boolean;
   showDirections?: boolean;
   onDirectionsReady?: (info: { distanceText: string; durationText: string } | null) => void;
+  // Live turn-by-turn toward pins[0]: watches the device GPS, follows the
+  // camera, advances steps as the user moves, and reroutes when off course.
+  navigationMode?: boolean;
+  onNavUpdate?: (nav: NavUpdate | null) => void;
+}
+
+export interface NavUpdate {
+  instruction: string;          // current maneuver, plain text
+  stepDistanceText: string;     // length of the current step
+  remainingDistanceText: string;
+  remainingDurationText: string;
+  arrived: boolean;
+}
+
+// Great-circle distance in meters
+function metersBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371000;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+// Google returns step instructions as HTML ("Turn <b>left</b> onto…") — plain-text them.
+function stripHtml(s: string): string {
+  return s.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 export default function MapView({
@@ -120,12 +148,16 @@ export default function MapView({
   interactive = true,
   showDirections = false,
   onDirectionsReady,
+  navigationMode = false,
+  onNavUpdate,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
   const userMarkerRef = useRef<any>(null);
   const dirRendererRef = useRef<any>(null);
+  const navMarkerRef = useRef<any>(null);
+  const navWatchRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -342,6 +374,130 @@ export default function MapView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showDirections, userLat, userLng, pins, ready]);
+
+  // Live navigation toward pins[0]: GPS watch + camera follow + step
+  // advancement + off-route rerouting. Voice guidance isn't possible on the
+  // web (Google's Navigation SDK is native-only) — this is the full visual
+  // turn-by-turn experience, and the parent offers a Google Maps handoff for
+  // spoken directions.
+  useEffect(() => {
+    if (!ready || !navigationMode || !mapRef.current || !(window as any).google?.maps) return;
+    if (pins.length === 0 || !navigator.geolocation) { onNavUpdate?.(null); return; }
+    const maps = (window as any).google.maps;
+    const destination = { lat: pins[0].lat, lng: pins[0].lng };
+    let cancelled = false;
+
+    const renderer = new maps.DirectionsRenderer({
+      map: mapRef.current,
+      suppressMarkers: true,
+      polylineOptions: { strokeColor: '#c8552b', strokeWeight: 6, strokeOpacity: 0.9 },
+    });
+
+    // Route bookkeeping lives in a local: steps, current step index, the
+    // route's overview path (for off-route detection), last reroute time.
+    let route: { steps: any[]; stepIndex: number; overview: any[]; lastRouteAt: number } | null = null;
+    let routing = false;
+
+    const requestRoute = (from: { lat: number; lng: number }) => {
+      if (routing) return;
+      routing = true;
+      new maps.DirectionsService().route(
+        { origin: from, destination, travelMode: maps.TravelMode.DRIVING },
+        (result: any, status: any) => {
+          routing = false;
+          if (cancelled) return;
+          if (status === 'OK' && result) {
+            renderer.setDirections(result);
+            route = {
+              steps: result.routes[0]?.legs[0]?.steps || [],
+              stepIndex: 0,
+              overview: result.routes[0]?.overview_path || [],
+              lastRouteAt: Date.now(),
+            };
+            pushUpdate(from);
+          } else {
+            onNavUpdate?.(null);
+          }
+        },
+      );
+    };
+
+    const pushUpdate = (pos: { lat: number; lng: number }) => {
+      if (!route) return;
+      // Advance past steps whose endpoint we've reached (~45 m)
+      while (route.stepIndex < route.steps.length - 1) {
+        const end = route.steps[route.stepIndex].end_location;
+        if (metersBetween(pos, { lat: end.lat(), lng: end.lng() }) < 45) route.stepIndex++;
+        else break;
+      }
+      const arrived = metersBetween(pos, destination) < 35;
+      let remM = 0, remS = 0;
+      for (let i = route.stepIndex; i < route.steps.length; i++) {
+        remM += route.steps[i].distance?.value || 0;
+        remS += route.steps[i].duration?.value || 0;
+      }
+      const cur = route.steps[route.stepIndex];
+      onNavUpdate?.({
+        instruction: arrived
+          ? 'You have arrived'
+          : stripHtml(cur?.instructions || 'Head toward the pickup spot'),
+        stepDistanceText: cur?.distance?.text || '',
+        remainingDistanceText: remM >= 322 ? `${(remM / 1609.34).toFixed(1)} mi` : `${Math.round(remM * 3.281)} ft`,
+        remainingDurationText: `${Math.max(1, Math.round(remS / 60))} min`,
+        arrived,
+      });
+      // Off-route (> 80 m from the drawn route) → reroute, at most every 20 s
+      if (!arrived && route.overview.length > 1 && Date.now() - route.lastRouteAt > 20000) {
+        let nearest = Infinity;
+        for (const p of route.overview) {
+          const d = metersBetween(pos, { lat: p.lat(), lng: p.lng() });
+          if (d < nearest) nearest = d;
+        }
+        if (nearest > 80) requestRoute(pos);
+      }
+    };
+
+    navWatchRef.current = navigator.geolocation.watchPosition(
+      (fix) => {
+        if (cancelled || !mapRef.current) return;
+        const pos = { lat: fix.coords.latitude, lng: fix.coords.longitude };
+        if (!navMarkerRef.current) {
+          navMarkerRef.current = new maps.Marker({
+            position: pos,
+            map: mapRef.current,
+            icon: {
+              path: maps.SymbolPath.CIRCLE,
+              scale: 9,
+              fillColor: '#4285F4',
+              fillOpacity: 1,
+              strokeColor: '#fff',
+              strokeWeight: 3,
+            },
+            zIndex: 1000,
+          });
+        } else {
+          navMarkerRef.current.setPosition(pos);
+        }
+        mapRef.current.panTo(pos);
+        if ((mapRef.current.getZoom() || 0) < 15) mapRef.current.setZoom(16);
+        if (!route) requestRoute(pos);
+        else pushUpdate(pos);
+      },
+      () => { if (!cancelled) onNavUpdate?.(null); },
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 },
+    );
+
+    return () => {
+      cancelled = true;
+      if (navWatchRef.current != null) {
+        navigator.geolocation.clearWatch(navWatchRef.current);
+        navWatchRef.current = null;
+      }
+      if (navMarkerRef.current) { navMarkerRef.current.setMap(null); navMarkerRef.current = null; }
+      renderer.setMap(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigationMode, ready, pins[0]?.lat, pins[0]?.lng]);
 
   if (error) {
     return (
