@@ -25,6 +25,7 @@ import {
   setBugReportStatus,
   getUserRoleById,
   getAdminFinanceBreakdown,
+  getSellersForAdmin,
 } from '@/lib/db';
 
 // Staff tiers: chief admins ('admin') see everything; secondary admins see
@@ -49,7 +50,7 @@ export async function GET(request: NextRequest) {
     // Financial data is chief-admin only; general moderation data needs at
     // least secondary admin; bug reports are open to all staff (support).
     const CHIEF_ONLY = ['financials', 'financeBreakdown', 'ordersList', 'cooksPayouts', 'cookPayoutDetail'];
-    const MODERATOR_ONLY = ['stats', 'pending', 'users', 'userDetail', 'userOrders', 'dishes'];
+    const MODERATOR_ONLY = ['stats', 'pending', 'users', 'userDetail', 'userOrders', 'dishes', 'sellersList'];
     if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
     if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
 
@@ -93,6 +94,16 @@ export async function GET(request: NextRequest) {
     if (action === 'financeBreakdown') {
       const breakdown = await getAdminFinanceBreakdown();
       return NextResponse.json(breakdown);
+    }
+
+    if (action === 'sellersList') {
+      const pickup = parseInt(searchParams.get('maxPickupMin') || '0');
+      const sellers = await getSellersForAdmin({
+        environment: searchParams.get('environment') || null,
+        flag: searchParams.get('flag') || null,
+        maxPickupMin: Number.isFinite(pickup) && pickup > 0 ? pickup : null,
+      });
+      return NextResponse.json(sellers);
     }
 
     if (action === 'dishes') {

@@ -206,6 +206,7 @@ interface AdminStats {
   totalOrders: number;
   orphanDishes: number;
   openBugs: number;
+  resolvedBugs: number;
 }
 
 interface AdminUserRow {
@@ -414,7 +415,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs' | 'admin-finance'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs' | 'admin-finance' | 'admin-sellers'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [dishOffset, setDishOffset] = useState(0);
@@ -699,6 +700,12 @@ export default function Home() {
   const [adminCooks, setAdminCooks] = useState<any[]>([]);
   const [adminCooksUnattributed, setAdminCooksUnattributed] = useState<any>(null);
   const [adminCooksSummary, setAdminCooksSummary] = useState<any>(null);
+  // Sellers browser (stats-grid Sellers card): filter by kitchen type,
+  // kitchen conditions, or earliest-pickup window
+  const [adminSellers, setAdminSellers] = useState<any[]>([]);
+  const [adminSellerEnv, setAdminSellerEnv] = useState('');
+  const [adminSellerFlag, setAdminSellerFlag] = useState('');
+  const [adminSellerPickup, setAdminSellerPickup] = useState(0);
   const [adminCooksSearch, setAdminCooksSearch] = useState('');
   const [adminCooksOffset, setAdminCooksOffset] = useState(0);
   const [adminCooksHasMore, setAdminCooksHasMore] = useState(false);
@@ -872,6 +879,21 @@ export default function Home() {
       setAdminFinancials(data);
     } catch (e) {
       console.error('Load admin financials error:', e);
+    }
+  };
+
+  const loadAdminSellers = async () => {
+    try {
+      const params = new URLSearchParams({ action: 'sellersList' });
+      if (adminSellerEnv) params.set('environment', adminSellerEnv);
+      if (adminSellerFlag) params.set('flag', adminSellerFlag);
+      if (adminSellerPickup > 0) params.set('maxPickupMin', String(adminSellerPickup));
+      const res = await fetch(`/api/admin?${params.toString()}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setAdminSellers(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('Load admin sellers error:', e);
     }
   };
 
@@ -1871,7 +1893,7 @@ export default function Home() {
         if (data.adminPending != null) {
           setAdminStats(prev => prev
             ? { ...prev, pending: data.adminPending }
-            : { pending: data.adminPending, sellers: 0, suspended: 0, admins: 0, totalUsers: 0, totalDishes: 0, totalOrders: 0, orphanDishes: 0, openBugs: 0 });
+            : { pending: data.adminPending, sellers: 0, suspended: 0, admins: 0, totalUsers: 0, totalDishes: 0, totalOrders: 0, orphanDishes: 0, openBugs: 0, resolvedBugs: 0 });
         }
 
         // Orders: refetch only when the version string moved
@@ -1964,10 +1986,11 @@ export default function Home() {
     if (screen === 'admin-finance' && chief) loadAdminFinanceBreakdown();
     if (screen === 'admin-pending' && moderator) loadAdminPending();
     if (screen === 'admin-users' && moderator) loadAdminUsers();
+    if (screen === 'admin-sellers' && moderator) loadAdminSellers();
     if (screen === 'admin-dishes' && moderator) loadAdminDishes();
     if (screen === 'admin-bugs') loadAdminBugs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, adminUserFilter, adminUserSearch, adminDishSearch, adminBugFilter]);
+  }, [screen, adminUserFilter, adminUserSearch, adminDishSearch, adminBugFilter, adminSellerEnv, adminSellerFlag, adminSellerPickup]);
 
   // Auto-scroll to bottom of chat when new messages arrive
   useEffect(() => {
@@ -5837,16 +5860,17 @@ export default function Home() {
             )}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 14 }}>
-              {[
-                { label: 'Users', value: adminStats?.totalUsers ?? '—', color: C.ink },
-                { label: 'Sellers', value: adminStats?.sellers ?? '—', color: C.green },
-                { label: 'Dishes', value: adminStats?.totalDishes ?? '—', color: C.terracotta },
-                { label: 'Orders', value: adminStats?.totalOrders ?? '—', color: C.gold },
-              ].map(t => (
-                <div key={t.label} style={{ background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+              {([
+                { label: 'Users', value: adminStats?.totalUsers ?? '—', sub: 'View all users', color: C.ink, go: 'admin-users' },
+                { label: 'Sellers', value: adminStats?.sellers ?? '—', sub: 'Filter by kitchen', color: C.green, go: 'admin-sellers' },
+                { label: 'Dishes', value: adminStats?.totalDishes ?? '—', sub: 'Moderate dishes', color: C.terracotta, go: 'admin-dishes' },
+                { label: 'Bug reports', value: adminStats?.openBugs ?? '—', sub: `new · ${adminStats?.resolvedBugs ?? 0} read`, color: C.gold, go: 'admin-bugs' },
+              ] as const).map(t => (
+                <button key={t.label} onClick={() => setScreen(t.go)} style={{ background: C.card, borderRadius: 12, padding: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textAlign: 'left' }}>
                   <div style={{ font: `500 11px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em' }}>{t.label}</div>
                   <div style={{ font: `600 24px ${font.serif}`, color: t.color, marginTop: 4 }}>{t.value}</div>
-                </div>
+                  <div style={{ font: `400 10.5px ${font.sans}`, color: C.muted, marginTop: 2, display: 'flex', alignItems: 'center', gap: 2 }}>{t.sub} <ChevronRight size={10} /></div>
+                </button>
               ))}
             </div>
 
@@ -6347,6 +6371,108 @@ export default function Home() {
             </div>
           );
         })()}
+
+        {/* ================= ADMIN: SELLERS BROWSER ================= */}
+        {screen === 'admin-sellers' && isModRole(user.role) && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Sellers</div>
+            </div>
+
+            <div style={{ font: `500 11px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Kitchen type</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+              {['', 'Home kitchen', 'Commercial kitchen', 'Community kitchen', 'Outdoor BBQ', 'Food cart', 'Food truck'].map(env => (
+                <button
+                  key={env || 'all'}
+                  onClick={() => setAdminSellerEnv(env)}
+                  style={{ padding: '6px 12px', background: adminSellerEnv === env ? C.ink : C.card, color: adminSellerEnv === env ? '#fff' : C.inkSoft, border: `1px solid ${adminSellerEnv === env ? C.ink : C.divider}`, borderRadius: 16, font: `500 11.5px ${font.sans}` }}
+                >
+                  {env || 'All'}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ font: `500 11px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Kitchen conditions</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+              {([
+                { key: '', label: 'All' },
+                { key: 'pets', label: 'Pets in home' },
+                { key: 'smokers', label: 'Smokers in home' },
+                { key: 'nut-free', label: 'Nut-free' },
+                { key: 'gluten-free', label: 'Gluten-free' },
+              ] as const).map(f => (
+                <button
+                  key={f.key || 'all'}
+                  onClick={() => setAdminSellerFlag(f.key)}
+                  style={{ padding: '6px 12px', background: adminSellerFlag === f.key ? C.ink : C.card, color: adminSellerFlag === f.key ? '#fff' : C.inkSoft, border: `1px solid ${adminSellerFlag === f.key ? C.ink : C.divider}`, borderRadius: 16, font: `500 11.5px ${font.sans}` }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ font: `500 11px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Earliest pickup</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+              {([
+                { val: 0, label: 'Any' },
+                { val: 15, label: '≤ 15 min' },
+                { val: 30, label: '≤ 30 min' },
+                { val: 60, label: '≤ 1 hour' },
+              ] as const).map(p => (
+                <button
+                  key={p.val}
+                  onClick={() => setAdminSellerPickup(p.val)}
+                  style={{ padding: '6px 12px', background: adminSellerPickup === p.val ? C.ink : C.card, color: adminSellerPickup === p.val ? '#fff' : C.inkSoft, border: `1px solid ${adminSellerPickup === p.val ? C.ink : C.divider}`, borderRadius: 16, font: `500 11.5px ${font.sans}` }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {adminSellers.map((s: any) => {
+                const fmtMin = (m: number | null) => m == null ? '—' : m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}`;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => loadAdminUserDetail(s.id)}
+                    style={{ background: C.card, borderRadius: 12, padding: 12, display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)', textAlign: 'left' }}
+                  >
+                    {s.photo_url ? (
+                      <span style={{ width: 40, height: 40, borderRadius: '50%', backgroundImage: `url(${s.photo_url})`, backgroundSize: 'cover', flex: 'none' }} />
+                    ) : (
+                      <span style={{ width: 40, height: 40, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.inkSoft, font: `500 14px ${font.sans}`, flex: 'none' }}>{s.avatar}</span>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ font: `500 14px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.kitchen_name || s.name}</div>
+                      <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginTop: 2 }}>
+                        {s.kitchen_environment || 'Kitchen type not set'} · pickup {fmtMin(s.pickup_min_minutes)}–{fmtMin(s.pickup_max_minutes)}
+                      </div>
+                      {s.kitchen_flags && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                          {String(s.kitchen_flags).split(',').map((f: string) => f.trim()).filter(Boolean).map((flag: string) => (
+                            <span key={flag} style={{ background: C.surface, color: C.inkSoft, padding: '2px 7px', borderRadius: 6, font: `500 10px ${font.sans}` }}>
+                              {flag.charAt(0).toUpperCase() + flag.slice(1).replace('-', ' ')}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <ChevronRight size={16} color={C.muted} />
+                  </button>
+                );
+              })}
+              {adminSellers.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No sellers match these filters.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ================= ADMIN: DISH MODERATION ================= */}
         {screen === 'admin-dishes' && isModRole(user.role) && (
