@@ -26,6 +26,8 @@ import {
   getUserRoleById,
   getAdminFinanceBreakdown,
   getSellersForAdmin,
+  getVendorApplications,
+  setVendorStatus,
 } from '@/lib/db';
 
 // Staff tiers: chief admins ('admin') see everything; secondary admins see
@@ -50,7 +52,7 @@ export async function GET(request: NextRequest) {
     // Financial data is chief-admin only; general moderation data needs at
     // least secondary admin; bug reports are open to all staff (support).
     const CHIEF_ONLY = ['financials', 'financeBreakdown', 'ordersList', 'cooksPayouts', 'cookPayoutDetail'];
-    const MODERATOR_ONLY = ['stats', 'pending', 'users', 'userDetail', 'userOrders', 'dishes', 'sellersList'];
+    const MODERATOR_ONLY = ['stats', 'pending', 'users', 'userDetail', 'userOrders', 'dishes', 'sellersList', 'vendorApplications'];
     if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
     if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
 
@@ -94,6 +96,11 @@ export async function GET(request: NextRequest) {
     if (action === 'financeBreakdown') {
       const breakdown = await getAdminFinanceBreakdown();
       return NextResponse.json(breakdown);
+    }
+
+    if (action === 'vendorApplications') {
+      const apps = await getVendorApplications();
+      return NextResponse.json(apps);
     }
 
     if (action === 'sellersList') {
@@ -184,7 +191,7 @@ export async function POST(request: NextRequest) {
     // changes need at least admin (setRole is further restricted below). Bug
     // triage (setBugStatus) is open to all staff, including support.
     const CHIEF_ONLY = ['updateSettings', 'deleteUser'];
-    const MODERATOR_ONLY = ['approveSeller', 'rejectSeller', 'suspendSeller', 'unsuspendSeller', 'setDisabled', 'deleteDish', 'setRole'];
+    const MODERATOR_ONLY = ['approveSeller', 'rejectSeller', 'suspendSeller', 'unsuspendSeller', 'setDisabled', 'deleteDish', 'setRole', 'setVendorStatus'];
     if (CHIEF_ONLY.includes(action) && !chief) return forbidden();
     if (MODERATOR_ONLY.includes(action) && !moderator) return forbidden();
 
@@ -200,6 +207,15 @@ export async function POST(request: NextRequest) {
       const report = await setBugReportStatus(parseInt(body.reportId), status);
       if (!report) return NextResponse.json({ error: 'Report not found' }, { status: 404 });
       return NextResponse.json(report);
+    }
+
+    if (action === 'setVendorStatus') {
+      const vendorId = parseInt(body.vendorId);
+      const status = body.status === 'approved' ? 'approved' : body.status === 'rejected' ? 'rejected' : null;
+      if (!vendorId || !status) return NextResponse.json({ error: 'vendorId and valid status required' }, { status: 400 });
+      const vendor = await setVendorStatus(vendorId, status);
+      if (!vendor) return NextResponse.json({ error: 'Vendor not found' }, { status: 404 });
+      return NextResponse.json(vendor);
     }
 
     if (action === 'updateSettings') {

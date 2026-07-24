@@ -9,6 +9,7 @@ import { parseSides, sidePriceFor } from '@/lib/sides';
 import { FOOD_TAGS, MAX_DISH_TAGS, KITCHEN_CONDITION_FILTERS, conditionLabel } from '@/lib/tags';
 import MarketingIntro from '@/components/MarketingIntro';
 import WelcomeChooser from '@/components/WelcomeChooser';
+import SkipTheLineIntro from '@/components/SkipTheLineIntro';
 
 // Heavy, screen-specific components (Leaflet map, Stripe checkout, address
 // autocomplete) are code-split out of the initial bundle and loaded on demand.
@@ -24,6 +25,15 @@ const CheckoutPayment = dynamic(() => import('@/components/CheckoutPayment'), { 
 const isStaffRole = (r?: string | null) => r === 'admin' || r === 'secondary_admin' || r === 'support';
 const isModRole = (r?: string | null) => r === 'admin' || r === 'secondary_admin';
 const ROLE_BADGE: Record<string, string> = { admin: 'CHIEF ADMIN', secondary_admin: 'ADMIN', support: 'SUPPORT' };
+
+// Skip the Line: business + venue type labels
+const BIZ_TYPE_LABEL: Record<string, string> = {
+  restaurant: 'Restaurant', food_truck: 'Food truck', stadium_booth: 'Stadium booth',
+  festival_vendor: 'Festival vendor', caterer: 'Caterer', other: 'Food business',
+};
+const VENUE_TYPE_LABEL: Record<string, string> = {
+  festival: 'Festival', concert: 'Concert', stadium: 'Stadium', fair: 'Fair', other: 'Event',
+};
 const ROLE_NAME: Record<string, string> = { user: 'Member', admin: 'Chief admin', secondary_admin: 'Admin', support: 'Support' };
 
 interface Dish {
@@ -417,7 +427,7 @@ const font = {
 };
 
 export default function Home() {
-  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs' | 'admin-finance' | 'admin-sellers'>('feed');
+  const [screen, setScreen] = useState<'feed' | 'meal' | 'cart' | 'checkout-payment' | 'profile' | 'seller-dashboard' | 'cook-profile' | 'notifications' | 'orders' | 'order-detail' | 'kitchen-queue' | 'chat' | 'admin' | 'admin-pending' | 'admin-users' | 'admin-user-detail' | 'admin-dishes' | 'admin-orders' | 'admin-cook-payouts' | 'admin-cook-payout-detail' | 'admin-bugs' | 'admin-finance' | 'admin-sellers' | 'admin-vendors' | 'stl-vendor-signup' | 'stl-venue-create' | 'stl-venue' | 'stl-vendor'>('feed');
   const [user, setUser] = useState<User | null>(null);
   const [dishes, setDishes] = useState<Dish[]>([]);
   const [dishOffset, setDishOffset] = useState(0);
@@ -746,7 +756,34 @@ export default function Home() {
   const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   // Community feed
-  const [homeTab, setHomeTab] = useState<'discover' | 'feed'>('discover');
+  const [homeTab, setHomeTab] = useState<'discover' | 'feed' | 'stl'>('discover');
+  // ===== SKIP THE LINE =====
+  const [showStlIntro, setShowStlIntro] = useState(false);
+  const [stlData, setStlData] = useState<any>(null); // { venues, vendors, myVendor, myVenues }
+  const [stlVenueDetail, setStlVenueDetail] = useState<any>(null);
+  const [stlVenueTab, setStlVenueTab] = useState<number | 'all'>('all');
+  const [stlVendorDetail, setStlVendorDetail] = useState<any>(null);
+  // Business signup form
+  const [stlBizName, setStlBizName] = useState('');
+  const [stlBizType, setStlBizType] = useState('restaurant');
+  const [stlBizDesc, setStlBizDesc] = useState('');
+  const [stlPermitFile, setStlPermitFile] = useState<File | null>(null);
+  const [stlSubmitting, setStlSubmitting] = useState(false);
+  const stlPermitInputRef = useRef<HTMLInputElement>(null);
+  // Venue create form
+  const [stlVenueName, setStlVenueName] = useState('');
+  const [stlVenueType, setStlVenueType] = useState('festival');
+  const [stlVenueLocation, setStlVenueLocation] = useState('');
+  const [stlVenueStart, setStlVenueStart] = useState('');
+  const [stlVenueEnd, setStlVenueEnd] = useState('');
+  // Venue manage: add-vendor + add-item mini forms
+  const [stlNewVendorName, setStlNewVendorName] = useState('');
+  const [stlNewVendorType, setStlNewVendorType] = useState('festival_vendor');
+  const [stlItemName, setStlItemName] = useState('');
+  const [stlItemPrice, setStlItemPrice] = useState('');
+  const [stlItemDesc, setStlItemDesc] = useState('');
+  const [stlItemForVendor, setStlItemForVendor] = useState<number | null>(null);
+  const [adminVendorApps, setAdminVendorApps] = useState<any[]>([]);
   const [posts, setPosts] = useState<Post[]>([]);
   const [composerText, setComposerText] = useState('');
   const [composerPhoto, setComposerPhoto] = useState<string | null>(null);
@@ -883,6 +920,194 @@ export default function Home() {
       setAdminFinancials(data);
     } catch (e) {
       console.error('Load admin financials error:', e);
+    }
+  };
+
+  // ===== SKIP THE LINE =====
+  const openStlTab = () => {
+    setHomeTab('stl');
+    try {
+      if (!localStorage.getItem('plates_stl_intro_seen')) setShowStlIntro(true);
+    } catch {}
+  };
+  const dismissStlIntro = () => {
+    setShowStlIntro(false);
+    try { localStorage.setItem('plates_stl_intro_seen', '1'); } catch {}
+  };
+
+  const loadStlBrowse = async () => {
+    try {
+      const res = await fetch('/api/stl?action=browse');
+      if (!res.ok) return;
+      setStlData(await res.json());
+    } catch (e) { console.error('STL browse error:', e); }
+  };
+
+  const openStlVenue = async (venueId: number) => {
+    try {
+      const res = await fetch(`/api/stl?action=venue&venueId=${venueId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setStlVenueDetail(data);
+      setStlVenueTab('all');
+      setStlItemForVendor(null);
+      setScreen('stl-venue');
+    } catch (e) { console.error('STL venue error:', e); }
+  };
+
+  // Re-fetch without resetting the selected vendor tab / screen
+  const refreshStlVenue = async (venueId: number) => {
+    try {
+      const res = await fetch(`/api/stl?action=venue&venueId=${venueId}`);
+      if (res.ok) setStlVenueDetail(await res.json());
+    } catch (e) { console.error('STL venue refresh error:', e); }
+  };
+  const refreshStlVendor = async (vendorId: number) => {
+    try {
+      const res = await fetch(`/api/stl?action=vendor&vendorId=${vendorId}`);
+      if (res.ok) setStlVendorDetail(await res.json());
+    } catch (e) { console.error('STL vendor refresh error:', e); }
+  };
+
+  const openStlVendor = async (vendorId: number) => {
+    try {
+      const res = await fetch(`/api/stl?action=vendor&vendorId=${vendorId}`);
+      if (!res.ok) return;
+      setStlVendorDetail(await res.json());
+      setScreen('stl-vendor');
+    } catch (e) { console.error('STL vendor error:', e); }
+  };
+
+  const stlPost = async (body: any): Promise<any | null> => {
+    try {
+      const res = await fetch('/api/stl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error || 'Something went wrong');
+        return null;
+      }
+      return data;
+    } catch (e) {
+      console.error('STL post error:', e);
+      showToast('Something went wrong');
+      return null;
+    }
+  };
+
+  const submitVendorSignup = async () => {
+    if (stlSubmitting) return;
+    if (stlBizName.trim().length < 2) { showToast('Enter your business name'); return; }
+    if (!stlPermitFile) { showToast('Upload a photo of your permit or license'); return; }
+    setStlSubmitting(true);
+    try {
+      const permitUrl = await uploadImage(stlPermitFile);
+      if (!permitUrl) { showToast('Permit upload failed — try again'); return; }
+      const vendor = await stlPost({
+        action: 'registerVendor',
+        name: stlBizName.trim(),
+        businessType: stlBizType,
+        description: stlBizDesc.trim() || null,
+        permitUrl,
+      });
+      if (vendor) {
+        showToast('Application submitted — we’ll review it shortly');
+        setStlBizName(''); setStlBizDesc(''); setStlPermitFile(null);
+        await loadStlBrowse();
+        setScreen('feed');
+      }
+    } finally {
+      setStlSubmitting(false);
+    }
+  };
+
+  const submitVenueCreate = async () => {
+    if (stlSubmitting) return;
+    if (stlVenueName.trim().length < 2) { showToast('Enter the event name'); return; }
+    setStlSubmitting(true);
+    try {
+      const venue = await stlPost({
+        action: 'createVenue',
+        name: stlVenueName.trim(),
+        venueType: stlVenueType,
+        location: stlVenueLocation.trim() || null,
+        startsOn: stlVenueStart || null,
+        endsOn: stlVenueEnd || null,
+      });
+      if (venue) {
+        showToast(`${VENUE_TYPE_LABEL[stlVenueType] || 'Event'} created — add your vendors`);
+        setStlVenueName(''); setStlVenueLocation(''); setStlVenueStart(''); setStlVenueEnd('');
+        await loadStlBrowse();
+        await openStlVenue(venue.id);
+      }
+    } finally {
+      setStlSubmitting(false);
+    }
+  };
+
+  const addStlVenueVendor = async (venueId: number) => {
+    if (stlNewVendorName.trim().length < 2) { showToast('Enter the vendor’s name'); return; }
+    const vendor = await stlPost({ action: 'addVenueVendor', venueId, name: stlNewVendorName.trim(), businessType: stlNewVendorType });
+    if (vendor) {
+      setStlNewVendorName('');
+      showToast('Vendor added');
+      await openStlVenue(venueId);
+    }
+  };
+
+  const addStlMenuItem = async (vendorId: number, refresh: () => Promise<void>) => {
+    const price = parseFloat(stlItemPrice);
+    if (!stlItemName.trim() || !(price > 0)) { showToast('Item name and price required'); return; }
+    const item = await stlPost({ action: 'addMenuItem', vendorId, name: stlItemName.trim(), price, description: stlItemDesc.trim() || null });
+    if (item) {
+      setStlItemName(''); setStlItemPrice(''); setStlItemDesc('');
+      await refresh();
+    }
+  };
+
+  const deleteStlMenuItem = async (vendorId: number, itemId: number, refresh: () => Promise<void>) => {
+    const result = await stlPost({ action: 'deleteMenuItem', vendorId, itemId });
+    if (result) await refresh();
+  };
+
+  // Generate a menu-form link and hand it to the owner via the native share
+  // sheet (or clipboard on desktop) to send to their vendor.
+  const sendMenuForm = async (vendorId: number, vendorName: string) => {
+    const invite = await stlPost({ action: 'createMenuInvite', vendorId });
+    if (!invite) return;
+    const url = `${window.location.origin}/vendor-form/${invite.token}`;
+    const data = {
+      title: `Menu form for ${vendorName}`,
+      text: `Add your menu for Skip the Line on Plates — takes two minutes:`,
+      url,
+    };
+    if (navigator.share) {
+      try { await navigator.share(data); } catch { /* user dismissed */ }
+    } else {
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast('Menu form link copied — send it to your vendor');
+      } catch { showToast(url); }
+    }
+  };
+
+  const loadAdminVendorApps = async () => {
+    try {
+      const res = await fetch('/api/admin?action=vendorApplications');
+      if (!res.ok) return;
+      const data = await res.json();
+      setAdminVendorApps(Array.isArray(data) ? data : []);
+    } catch (e) { console.error('Admin vendor apps error:', e); }
+  };
+
+  const adminSetVendorStatus = async (vendorId: number, status: 'approved' | 'rejected') => {
+    const result = await adminAction({ action: 'setVendorStatus', vendorId, status });
+    if (result) {
+      showToast(status === 'approved' ? 'Business approved' : 'Application rejected');
+      await loadAdminVendorApps();
     }
   };
 
@@ -1992,9 +2217,16 @@ export default function Home() {
     if (screen === 'admin-users' && moderator) loadAdminUsers();
     if (screen === 'admin-sellers' && moderator) loadAdminSellers();
     if (screen === 'admin-dishes' && moderator) loadAdminDishes();
+    if (screen === 'admin-vendors' && moderator) loadAdminVendorApps();
     if (screen === 'admin-bugs') loadAdminBugs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, adminUserFilter, adminUserSearch, adminDishSearch, adminBugFilter, adminSellerEnv, adminSellerFlag, adminSellerPickup]);
+
+  // Skip the Line: load venues + vendors when the tab opens
+  useEffect(() => {
+    if (homeTab === 'stl' && user) loadStlBrowse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeTab]);
 
   // Auto-scroll to bottom of chat when new messages arrive
   useEffect(() => {
@@ -3265,6 +3497,20 @@ export default function Home() {
               >
                 Feed
               </button>
+              <button
+                onClick={openStlTab}
+                style={{
+                  padding: '10px 0',
+                  background: 'transparent',
+                  color: homeTab === 'stl' ? C.ink : C.muted,
+                  font: `500 15px ${font.serif}`,
+                  borderBottom: homeTab === 'stl' ? `2px solid ${C.terracotta}` : '2px solid transparent',
+                  marginBottom: -1,
+                  display: 'flex', alignItems: 'center', gap: 5,
+                }}
+              >
+                <span style={{ fontSize: 13 }}>⚡</span> Skip the Line
+              </button>
             </div>
 
             {homeTab === 'discover' && (<>
@@ -3794,6 +4040,449 @@ export default function Home() {
                 </div>
               </div>
             )}
+
+            {/* ================= SKIP THE LINE TAB ================= */}
+            {homeTab === 'stl' && (
+              <div style={{ padding: '14px 20px 0' }}>
+                <div style={{ background: C.ink, borderRadius: 16, padding: 18, marginBottom: 16, color: '#fff' }}>
+                  <div style={{ font: `600 19px ${font.serif}`, marginBottom: 4 }}>⚡ Skip the Line</div>
+                  <div style={{ font: `400 12.5px/1.5 ${font.sans}`, opacity: .85 }}>
+                    Order from stadiums, festivals, and local spots — we buzz you the moment it&apos;s ready.
+                  </div>
+                  <button onClick={() => setShowStlIntro(true)} style={{ marginTop: 12, padding: '8px 14px', background: 'rgba(255,255,255,.14)', color: '#fff', border: '1px solid rgba(255,255,255,.3)', borderRadius: 10, font: `500 12px ${font.sans}` }}>
+                    How it works
+                  </button>
+                </div>
+
+                {stlData?.myVendor && (
+                  <button onClick={() => openStlVendor(stlData.myVendor.id)} style={{ width: '100%', background: C.card, borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
+                    <div style={{ width: 38, height: 38, borderRadius: 10, background: C.greenLight, color: C.green, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                      <ChefHat size={18} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>{stlData.myVendor.name}</div>
+                      <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                        {BIZ_TYPE_LABEL[stlData.myVendor.business_type] || 'Food business'} · {stlData.myVendor.status === 'approved' ? 'Live — manage your menu' : stlData.myVendor.status === 'pending' ? 'Pending review' : 'Application rejected'}
+                      </div>
+                    </div>
+                    <span style={{ flex: 'none', padding: '3px 9px', borderRadius: 8, font: `500 10px ${font.sans}`, background: stlData.myVendor.status === 'approved' ? C.greenLight : '#fff9e6', color: stlData.myVendor.status === 'approved' ? C.green : '#7a5c0b' }}>
+                      {stlData.myVendor.status === 'approved' ? 'LIVE' : stlData.myVendor.status.toUpperCase()}
+                    </span>
+                  </button>
+                )}
+
+                {stlData?.myVenues?.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Your events</div>
+                    {stlData.myVenues.map((v: any) => (
+                      <button key={v.id} onClick={() => openStlVenue(v.id)} style={{ width: '100%', background: C.card, borderRadius: 12, padding: 12, marginBottom: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>{v.name}</div>
+                          <div style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{VENUE_TYPE_LABEL[v.venue_type] || 'Event'} · {v.vendor_count} vendor{v.vendor_count === 1 ? '' : 's'}</div>
+                        </div>
+                        <ChevronRight size={15} color={C.muted} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Festivals &amp; events</div>
+                  {(stlData?.venues || []).map((v: any) => (
+                    <button key={v.id} onClick={() => openStlVenue(v.id)} style={{ width: '100%', background: C.card, borderRadius: 14, padding: 14, marginBottom: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: C.terracottaLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flex: 'none' }}>
+                        {v.venue_type === 'stadium' ? '🏟️' : v.venue_type === 'concert' ? '🎤' : v.venue_type === 'fair' ? '🎡' : '🎪'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{v.name}</div>
+                        <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                          {VENUE_TYPE_LABEL[v.venue_type] || 'Event'}{v.location ? ` · ${v.location}` : ''} · {v.vendor_count} vendor{v.vendor_count === 1 ? '' : 's'}
+                        </div>
+                      </div>
+                      <ChevronRight size={16} color={C.muted} />
+                    </button>
+                  ))}
+                  {(!stlData || stlData.venues?.length === 0) && (
+                    <div style={{ padding: '20px 0', textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                      {stlData ? 'No events listed yet — yours could be first.' : 'Loading…'}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ font: `500 12px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Restaurants &amp; food trucks</div>
+                  {(stlData?.vendors || []).map((v: any) => (
+                    <button key={v.id} onClick={() => openStlVendor(v.id)} style={{ width: '100%', background: C.card, borderRadius: 14, padding: 14, marginBottom: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flex: 'none' }}>
+                        {v.business_type === 'food_truck' ? '🚚' : v.business_type === 'stadium_booth' ? '🏟️' : '🍽️'}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{v.name}</div>
+                        <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                          {BIZ_TYPE_LABEL[v.business_type] || 'Food business'} · {v.item_count} item{v.item_count === 1 ? '' : 's'}
+                        </div>
+                      </div>
+                      <ChevronRight size={16} color={C.muted} />
+                    </button>
+                  ))}
+                  {stlData && stlData.vendors?.length === 0 && (
+                    <div style={{ padding: '14px 0 4px', textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                      No businesses live yet.
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ font: `500 12px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>For businesses</div>
+                {!stlData?.myVendor && (
+                  <button onClick={() => setScreen('stl-vendor-signup')} style={{ width: '100%', padding: 14, background: C.terracotta, color: '#fff', borderRadius: 12, font: `500 14px ${font.sans}`, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <Plus size={16} /> Register your food business
+                  </button>
+                )}
+                <button onClick={() => setScreen('stl-venue-create')} style={{ width: '100%', padding: 14, background: 'transparent', border: `1.5px solid ${C.ink}`, color: C.ink, borderRadius: 12, font: `500 14px ${font.sans}`, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  <Plus size={16} /> List your festival or event
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ================= STL: BUSINESS SIGNUP ================= */}
+        {screen === 'stl-vendor-signup' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Register your business</div>
+            </div>
+
+            <div style={{ font: `400 13px/1.5 ${font.sans}`, color: C.muted, marginBottom: 16 }}>
+              Skip the Line is for real food businesses — restaurants, trucks, stadium booths, festival vendors. Tell us who you are, upload your permit, and once you&apos;re approved you&apos;ll build your menu.
+            </div>
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>What type of business?</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+              {Object.entries(BIZ_TYPE_LABEL).map(([key, label]) => (
+                <button key={key} onClick={() => setStlBizType(key)} style={{ padding: '8px 14px', background: stlBizType === key ? C.ink : C.card, color: stlBizType === key ? '#fff' : C.inkSoft, border: `1px solid ${stlBizType === key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}` }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Business name</div>
+            <input type="text" value={stlBizName} onChange={(e) => setStlBizName(e.target.value)} placeholder="e.g. Smokey Joe's BBQ" maxLength={120} style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 12 }} />
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>About your food (optional)</div>
+            <textarea value={stlBizDesc} onChange={(e) => setStlBizDesc(e.target.value)} rows={2} maxLength={1000} placeholder="What do you serve?" style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `400 14px/1.5 ${font.sans}`, background: '#fff', marginBottom: 12, resize: 'none', fontFamily: font.sans }} />
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Permit or business license (required)</div>
+            <div onClick={() => stlPermitInputRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, background: C.card, border: `1px dashed ${C.divider}`, borderRadius: 12, cursor: 'pointer', marginBottom: 4 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: stlPermitFile ? C.greenLight : C.cardAlt, color: stlPermitFile ? C.green : C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
+                {stlPermitFile ? <CheckCircle size={18} /> : <Camera size={18} />}
+              </div>
+              <div style={{ font: `400 13px ${font.sans}`, color: stlPermitFile ? C.ink : C.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {stlPermitFile ? stlPermitFile.name : 'Tap to upload a photo of your permit'}
+              </div>
+            </div>
+            <input ref={stlPermitInputRef} type="file" accept="image/*" onChange={(e) => setStlPermitFile(e.target.files?.[0] || null)} style={{ display: 'none' }} />
+            <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 16 }}>
+              Health permit, business license, or food handler certificate — whatever your city requires. Only admins see it.
+            </div>
+
+            <button onClick={submitVendorSignup} disabled={stlSubmitting} style={{ width: '100%', padding: 14, background: stlSubmitting ? C.cardAlt : C.terracotta, color: stlSubmitting ? C.muted : '#fff', borderRadius: 14, font: `500 14px ${font.sans}` }}>
+              {stlSubmitting ? 'Submitting…' : 'Submit for review'}
+            </button>
+          </div>
+        )}
+
+        {/* ================= STL: CREATE VENUE ================= */}
+        {screen === 'stl-venue-create' && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>List your event</div>
+            </div>
+
+            <div style={{ font: `400 13px/1.5 ${font.sans}`, color: C.muted, marginBottom: 16 }}>
+              Festivals, concerts, stadiums, fairs. Create the event, add your vendors, and every vendor&apos;s menu together becomes the event menu. Don&apos;t know a vendor&apos;s menu? Send them a form link and it fills itself in.
+            </div>
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Event type</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+              {Object.entries(VENUE_TYPE_LABEL).map(([key, label]) => (
+                <button key={key} onClick={() => setStlVenueType(key)} style={{ padding: '8px 14px', background: stlVenueType === key ? C.ink : C.card, color: stlVenueType === key ? '#fff' : C.inkSoft, border: `1px solid ${stlVenueType === key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}` }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Event name</div>
+            <input type="text" value={stlVenueName} onChange={(e) => setStlVenueName(e.target.value)} placeholder="e.g. Riverside Food & Music Festival" maxLength={120} style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 12 }} />
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Location (optional)</div>
+            <input type="text" value={stlVenueLocation} onChange={(e) => setStlVenueLocation(e.target.value)} placeholder="e.g. Riverside Park, Austin TX" maxLength={200} style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 12 }} />
+
+            <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Dates (optional)</div>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+              <input type="date" value={stlVenueStart} onChange={(e) => setStlVenueStart(e.target.value)} style={{ flex: 1, padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+              <span style={{ color: C.muted, font: `400 13px ${font.sans}` }}>to</span>
+              <input type="date" value={stlVenueEnd} onChange={(e) => setStlVenueEnd(e.target.value)} style={{ flex: 1, padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+            </div>
+
+            <button onClick={submitVenueCreate} disabled={stlSubmitting} style={{ width: '100%', padding: 14, background: stlSubmitting ? C.cardAlt : C.terracotta, color: stlSubmitting ? C.muted : '#fff', borderRadius: 14, font: `500 14px ${font.sans}` }}>
+              {stlSubmitting ? 'Creating…' : 'Create event'}
+            </button>
+          </div>
+        )}
+
+        {/* ================= STL: VENUE PAGE ================= */}
+        {screen === 'stl-venue' && stlVenueDetail && (() => {
+          const { venue, vendors: vvs, items, isOwner } = stlVenueDetail;
+          const invites: any[] = stlVenueDetail.invites || [];
+          const itemsFor = (vendorId: number) => items.filter((i: any) => i.vendor_id === vendorId);
+          const pendingInvite = (vendorId: number) => invites.find((i: any) => i.vendor_id === vendorId && !i.submitted_at);
+          const shownVendors = stlVenueTab === 'all' ? vvs : vvs.filter((v: any) => v.id === stlVenueTab);
+          return (
+            <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                <button onClick={() => setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                  <ArrowLeft size={18} />
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: `500 20px ${font.serif}`, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{venue.name}</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                    {VENUE_TYPE_LABEL[venue.venue_type] || 'Event'}{venue.location ? ` · ${venue.location}` : ''}
+                  </div>
+                </div>
+                {isOwner && (
+                  <span style={{ flex: 'none', padding: '3px 9px', borderRadius: 8, background: C.ink, color: '#fff', font: `500 10px ${font.sans}`, letterSpacing: '.05em' }}>OWNER</span>
+                )}
+              </div>
+
+              {/* Vendor tabs */}
+              <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginBottom: 12, scrollbarWidth: 'none' as any }}>
+                <button onClick={() => setStlVenueTab('all')} style={{ flex: 'none', padding: '7px 14px', background: stlVenueTab === 'all' ? C.ink : C.card, color: stlVenueTab === 'all' ? '#fff' : C.inkSoft, border: `1px solid ${stlVenueTab === 'all' ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                  Full menu
+                </button>
+                {vvs.map((v: any) => (
+                  <button key={v.id} onClick={() => setStlVenueTab(v.id)} style={{ flex: 'none', padding: '7px 14px', background: stlVenueTab === v.id ? C.ink : C.card, color: stlVenueTab === v.id ? '#fff' : C.inkSoft, border: `1px solid ${stlVenueTab === v.id ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                    {v.name}
+                  </button>
+                ))}
+              </div>
+
+              {vvs.length === 0 && (
+                <div style={{ padding: '24px 0', textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                  No vendors yet{isOwner ? ' — add your first one below.' : '.'}
+                </div>
+              )}
+
+              {shownVendors.map((v: any) => {
+                const vendorItems = itemsFor(v.id);
+                const invite = isOwner ? pendingInvite(v.id) : null;
+                return (
+                  <div key={v.id} style={{ marginBottom: 16 }}>
+                    <button onClick={() => openStlVendor(v.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, textAlign: 'left', background: 'transparent' }}>
+                      <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{v.name}</div>
+                      <span style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{BIZ_TYPE_LABEL[v.business_type] || ''}</span>
+                      <div style={{ flex: 1 }} />
+                      <ChevronRight size={14} color={C.muted} />
+                    </button>
+
+                    {vendorItems.length === 0 ? (
+                      <div style={{ background: C.cardAlt, borderRadius: 10, padding: 12, font: `400 12px ${font.sans}`, color: C.muted }}>
+                        Menu coming soon{isOwner ? ' — add items below or send them the menu form.' : '.'}
+                      </div>
+                    ) : (
+                      <div style={{ background: C.card, borderRadius: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)', overflow: 'hidden' }}>
+                        {vendorItems.map((item: any, idx: number) => (
+                          <div key={item.id} onClick={() => openStlVendor(v.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderBottom: idx < vendorItems.length - 1 ? `1px solid ${C.hairline}` : 'none', cursor: 'pointer' }}>
+                            <span style={{ fontSize: 18, flex: 'none' }}>{item.emoji || '🍽️'}</span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ font: `500 13.5px ${font.sans}`, color: C.ink }}>{item.name}</div>
+                              {item.description && <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 1 }}>{item.description}</div>}
+                            </div>
+                            <div style={{ font: `500 13.5px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(item.price).toFixed(2)}</div>
+                            {isOwner && (
+                              <button onClick={(e) => { e.stopPropagation(); deleteStlMenuItem(v.id, item.id, () => refreshStlVenue(venue.id)); }} style={{ flex: 'none', color: C.mutedLight, padding: 4 }}>
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {isOwner && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                          <button onClick={() => setStlItemForVendor(stlItemForVendor === v.id ? null : v.id)} style={{ padding: '7px 12px', background: C.cardAlt, color: C.inkSoft, borderRadius: 10, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Plus size={13} /> Add item
+                          </button>
+                          <button onClick={() => sendMenuForm(v.id, v.name)} style={{ padding: '7px 12px', background: C.greenLight, color: C.green, borderRadius: 10, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Send size={12} /> {invite ? 'Re-send menu form' : 'Send menu form'}
+                          </button>
+                        </div>
+                        {invite && (
+                          <div style={{ font: `400 11px ${font.sans}`, color: '#7a5c0b', marginBottom: 6 }}>
+                            Menu form sent — waiting for {v.name} to fill it in.
+                          </div>
+                        )}
+                        {stlItemForVendor === v.id && (
+                          <div style={{ background: C.card, borderRadius: 12, padding: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                              <input type="text" value={stlItemName} onChange={(e) => setStlItemName(e.target.value)} placeholder="Item name" style={{ flex: 1, minWidth: 0, padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none' }}>
+                                <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>$</span>
+                                <input type="number" min="0" step="0.5" value={stlItemPrice} onChange={(e) => setStlItemPrice(e.target.value)} placeholder="0" style={{ width: 64, padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+                              </div>
+                            </div>
+                            <input type="text" value={stlItemDesc} onChange={(e) => setStlItemDesc(e.target.value)} placeholder="Short description (optional)" style={{ width: '100%', padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `400 12.5px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+                            <button onClick={() => addStlMenuItem(v.id, () => refreshStlVenue(venue.id))} style={{ width: '100%', padding: 10, background: C.ink, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}` }}>
+                              Add to {v.name}&apos;s menu
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {isOwner && (
+                <div style={{ background: C.card, borderRadius: 14, padding: 14, marginTop: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>Add a vendor</div>
+                  <input type="text" value={stlNewVendorName} onChange={(e) => setStlNewVendorName(e.target.value)} placeholder="Vendor name, e.g. Tino's Tacos" maxLength={120} style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13.5px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+                    {Object.entries(BIZ_TYPE_LABEL).map(([key, label]) => (
+                      <button key={key} onClick={() => setStlNewVendorType(key)} style={{ padding: '5px 10px', background: stlNewVendorType === key ? C.ink : C.surface, color: stlNewVendorType === key ? '#fff' : C.inkSoft, border: `1px solid ${stlNewVendorType === key ? C.ink : C.divider}`, borderRadius: 12, font: `500 11px ${font.sans}` }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={() => addStlVenueVendor(venue.id)} style={{ width: '100%', padding: 12, background: C.terracotta, color: '#fff', borderRadius: 10, font: `500 13.5px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                    <Plus size={15} /> Add vendor
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ================= STL: VENDOR PAGE ================= */}
+        {screen === 'stl-vendor' && stlVendorDetail && (() => {
+          const { vendor, items, venue, canManage } = stlVendorDetail;
+          return (
+            <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                <button onClick={() => venue ? openStlVenue(venue.id) : setScreen('feed')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                  <ArrowLeft size={18} />
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: `500 20px ${font.serif}`, color: C.ink }}>{vendor.name}</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
+                    {BIZ_TYPE_LABEL[vendor.business_type] || 'Food business'}{venue ? ` · at ${venue.name}` : ''}
+                  </div>
+                </div>
+              </div>
+
+              {vendor.description && (
+                <div style={{ font: `400 13px/1.5 ${font.sans}`, color: C.inkSoft, marginBottom: 14 }}>{vendor.description}</div>
+              )}
+
+              {canManage && vendor.status === 'pending' && (
+                <div style={{ background: '#fff9e6', border: '1px solid #f0d67a', borderRadius: 12, padding: 12, marginBottom: 14, font: `400 12.5px/1.5 ${font.sans}`, color: '#7a5c0b' }}>
+                  Your application is being reviewed. Build your menu now — it goes live the moment you&apos;re approved.
+                </div>
+              )}
+
+              <div style={{ font: `500 12px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Menu</div>
+              {items.length === 0 ? (
+                <div style={{ background: C.cardAlt, borderRadius: 12, padding: 16, font: `400 13px ${font.sans}`, color: C.muted, marginBottom: 12 }}>
+                  No items yet{canManage ? ' — add your first below.' : ' — check back soon.'}
+                </div>
+              ) : (
+                <div style={{ background: C.card, borderRadius: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', overflow: 'hidden', marginBottom: 12 }}>
+                  {items.map((item: any, idx: number) => (
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 13, borderBottom: idx < items.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
+                      <span style={{ fontSize: 20, flex: 'none' }}>{item.emoji || '🍽️'}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{item.name}</div>
+                        {item.description && <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 1 }}>{item.description}</div>}
+                      </div>
+                      <div style={{ font: `500 14px ${font.serif}`, color: C.terracotta, flex: 'none' }}>${Number(item.price).toFixed(2)}</div>
+                      {canManage && (
+                        <button onClick={() => deleteStlMenuItem(vendor.id, item.id, () => refreshStlVendor(vendor.id))} style={{ flex: 'none', color: C.mutedLight, padding: 4 }}>
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {canManage && (
+                <div style={{ background: C.card, borderRadius: 12, padding: 12, marginBottom: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                    <input type="text" value={stlItemName} onChange={(e) => setStlItemName(e.target.value)} placeholder="Item name" style={{ flex: 1, minWidth: 0, padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none' }}>
+                      <span style={{ font: `400 13px ${font.sans}`, color: C.muted }}>$</span>
+                      <input type="number" min="0" step="0.5" value={stlItemPrice} onChange={(e) => setStlItemPrice(e.target.value)} placeholder="0" style={{ width: 64, padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+                    </div>
+                  </div>
+                  <input type="text" value={stlItemDesc} onChange={(e) => setStlItemDesc(e.target.value)} placeholder="Short description (optional)" style={{ width: '100%', padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `400 12.5px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+                  <button onClick={() => addStlMenuItem(vendor.id, () => refreshStlVendor(vendor.id))} style={{ width: '100%', padding: 11, background: C.ink, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                    <Plus size={14} /> Add menu item
+                  </button>
+                </div>
+              )}
+
+              {!canManage && items.length > 0 && (
+                <div style={{ font: `400 12px/1.5 ${font.sans}`, color: C.muted, textAlign: 'center' }}>
+                  📱 Mobile ordering with ready alerts is rolling out here next — menus first.
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* ================= ADMIN: BUSINESS APPLICATIONS ================= */}
+        {screen === 'admin-vendors' && isModRole(user.role) && (
+          <div style={{ animation: 'plfade .3s ease', padding: '20px 22px 100px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <button onClick={() => setScreen('admin')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
+                <ArrowLeft size={18} />
+              </button>
+              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Business applications</div>
+            </div>
+
+            {adminVendorApps.length === 0 ? (
+              <div style={{ padding: 30, textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
+                No pending applications. 🎉
+              </div>
+            ) : adminVendorApps.map((a: any) => (
+              <div key={a.id} style={{ background: C.card, borderRadius: 14, padding: 14, marginBottom: 10, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <div style={{ font: `500 15px ${font.serif}`, color: C.ink, flex: 1 }}>{a.name}</div>
+                  <span style={{ padding: '2px 8px', background: C.cardAlt, color: C.inkSoft, borderRadius: 6, font: `500 10px ${font.sans}` }}>{BIZ_TYPE_LABEL[a.business_type] || a.business_type}</span>
+                </div>
+                <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginBottom: 6 }}>
+                  {a.owner_name || 'Unknown'}{a.owner_email ? ` · ${a.owner_email}` : ''} · applied {timeAgo(a.created_at)}
+                </div>
+                {a.description && <div style={{ font: `400 12.5px/1.5 ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>{a.description}</div>}
+                {a.permit_url && (
+                  <a href={a.permit_url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: C.cardAlt, color: C.ink, borderRadius: 8, font: `500 12px ${font.sans}`, textDecoration: 'none', marginBottom: 10 }}>
+                    📄 View permit
+                  </a>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => adminSetVendorStatus(a.id, 'approved')} disabled={adminActionSubmitting} style={{ flex: 1, padding: 10, background: C.green, color: '#fff', borderRadius: 10, font: `500 12.5px ${font.sans}` }}>Approve</button>
+                  <button onClick={() => adminSetVendorStatus(a.id, 'rejected')} disabled={adminActionSubmitting} style={{ flex: 1, padding: 10, background: 'transparent', border: `1px solid ${C.divider}`, color: '#c94b4b', borderRadius: 10, font: `500 12.5px ${font.sans}` }}>Reject</button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -5948,6 +6637,16 @@ export default function Home() {
                 </div>
                 <ChevronRight size={16} color={C.muted} />
               </button>
+              <button onClick={() => setScreen('admin-vendors')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderTop: `1px solid ${C.hairline}` }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: C.cardAlt, color: C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>
+                  ⚡
+                </div>
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ font: `500 14px ${font.serif}`, color: C.ink }}>Business applications</div>
+                  <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>Skip the Line vendors awaiting review</div>
+                </div>
+                <ChevronRight size={16} color={C.muted} />
+              </button>
               <button onClick={() => setScreen('admin-bugs')} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderTop: `1px solid ${C.hairline}` }}>
                 <div style={{ width: 34, height: 34, borderRadius: 10, background: adminStats && adminStats.openBugs > 0 ? C.terracottaLight : C.cardAlt, color: adminStats && adminStats.openBugs > 0 ? C.terracotta : C.inkSoft, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <Bug size={17} />
@@ -7134,6 +7833,9 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* ================= SKIP THE LINE INTRO ================= */}
+        {showStlIntro && <SkipTheLineIntro onDone={dismissStlIntro} />}
 
         {/* ================= REPORT A BUG SHEET ================= */}
         {showBugSheet && (

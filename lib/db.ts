@@ -68,6 +68,62 @@ async function runMigrations(): Promise<void> {
       )
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_bug_reports_status ON bug_reports(status, created_at DESC)`;
+
+    // ===== SKIP THE LINE =====
+    // Real food businesses (restaurants, stadium booths, festival vendors)
+    // and the venues (festivals/concerts/stadiums) that host them.
+    await sql`
+      CREATE TABLE IF NOT EXISTS venues (
+        id SERIAL PRIMARY KEY,
+        owner_user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        venue_type TEXT NOT NULL DEFAULT 'festival',
+        description TEXT,
+        location TEXT,
+        starts_on DATE,
+        ends_on DATE,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS vendors (
+        id SERIAL PRIMARY KEY,
+        owner_user_id INTEGER,
+        venue_id INTEGER,
+        name TEXT NOT NULL,
+        business_type TEXT NOT NULL DEFAULT 'restaurant',
+        description TEXT,
+        permit_url TEXT,
+        photo_url TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_vendors_venue ON vendors(venue_id)`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS vendor_menu_items (
+        id SERIAL PRIMARY KEY,
+        vendor_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        price DECIMAL(10, 2) NOT NULL,
+        emoji TEXT DEFAULT '🍽️',
+        available BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_vendor_menu_vendor ON vendor_menu_items(vendor_id)`;
+    // Shareable menu form: a festival owner sends the tokenized link to a
+    // vendor; the submitted items land under that vendor's tab.
+    await sql`
+      CREATE TABLE IF NOT EXISTS vendor_menu_invites (
+        token TEXT PRIMARY KEY,
+        vendor_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        submitted_at TIMESTAMP
+      )
+    `;
     await sql`
       UPDATE users SET kitchen_latitude = latitude, kitchen_longitude = longitude
       WHERE prep_address IS NOT NULL AND kitchen_latitude IS NULL AND latitude IS NOT NULL
@@ -2519,6 +2575,236 @@ export async function setOrderPaymentIntent(orderId: string, paymentIntentId: st
 export async function getOrderByPaymentIntent(paymentIntentId: string) {
   const result = await sql`
     SELECT * FROM orders WHERE stripe_payment_intent_id = ${paymentIntentId} LIMIT 1
+  `;
+  return result.rows[0] || null;
+}
+
+// ============= SKIP THE LINE =============
+// Venues (festivals, concerts, stadiums) and real-business vendors with
+// their menus. Standalone businesses register themselves (permit + admin
+// approval); venue vendors are listings curated by the venue owner.
+
+export async function createVenue(ownerUserId: number, opts: {
+  name: string; venueType: string; description?: string | null;
+  location?: string | null; startsOn?: string | null; endsOn?: string | null;
+}) {
+  const result = await sql`
+    INSERT INTO venues (owner_user_id, name, venue_type, description, location, starts_on, ends_on)
+    VALUES (${ownerUserId}, ${opts.name.trim().slice(0, 120)}, ${opts.venueType},
+            ${opts.description?.trim().slice(0, 1000) || null}, ${opts.location?.trim().slice(0, 200) || null},
+            ${opts.startsOn || null}, ${opts.endsOn || null})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getVenues() {
+  const result = await sql`
+    SELECT v.*, COUNT(ve.id)::int AS vendor_count
+    FROM venues v
+    LEFT JOIN vendors ve ON ve.venue_id = v.id
+    WHERE v.status = 'active'
+    GROUP BY v.id
+    ORDER BY v.starts_on ASC NULLS LAST, v.created_at DESC
+    LIMIT 100
+  `;
+  return result.rows;
+}
+
+export async function getMyVenues(ownerUserId: number) {
+  const result = await sql`
+    SELECT v.*, COUNT(ve.id)::int AS vendor_count
+    FROM venues v
+    LEFT JOIN vendors ve ON ve.venue_id = v.id
+    WHERE v.owner_user_id = ${ownerUserId}
+    GROUP BY v.id
+    ORDER BY v.created_at DESC
+  `;
+  return result.rows;
+}
+
+// Venue page: the venue, its vendors, and every vendor's menu items.
+export async function getVenueDetail(venueId: number) {
+  const venueResult = await sql`SELECT * FROM venues WHERE id = ${venueId} LIMIT 1`;
+  const venue = venueResult.rows[0];
+  if (!venue) return null;
+  const vendors = await sql`
+    SELECT * FROM vendors WHERE venue_id = ${venueId} ORDER BY created_at ASC
+  `;
+  const items = await sql`
+    SELECT m.* FROM vendor_menu_items m
+    JOIN vendors ve ON ve.id = m.vendor_id
+    WHERE ve.venue_id = ${venueId}
+    ORDER BY m.vendor_id, m.created_at ASC
+  `;
+  const invites = await sql`
+    SELECT i.token, i.vendor_id, i.submitted_at FROM vendor_menu_invites i
+    JOIN vendors ve ON ve.id = i.vendor_id
+    WHERE ve.venue_id = ${venueId}
+    ORDER BY i.created_at DESC
+  `;
+  return { venue, vendors: vendors.rows, items: items.rows, invites: invites.rows };
+}
+
+// Standalone business signup (restaurant / food truck / stadium booth...).
+// Requires admin approval before it appears publicly.
+export async function registerVendor(ownerUserId: number, opts: {
+  name: string; businessType: string; description?: string | null;
+  permitUrl?: string | null; photoUrl?: string | null;
+}) {
+  const result = await sql`
+    INSERT INTO vendors (owner_user_id, name, business_type, description, permit_url, photo_url, status)
+    VALUES (${ownerUserId}, ${opts.name.trim().slice(0, 120)}, ${opts.businessType},
+            ${opts.description?.trim().slice(0, 1000) || null}, ${opts.permitUrl || null}, ${opts.photoUrl || null}, 'pending')
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// Venue owners add vendor listings to their own venue. These are menu
+// listings (not payment accounts), so they're live immediately.
+export async function addVenueVendor(ownerUserId: number, venueId: number, name: string, businessType: string) {
+  const venue = await sql`SELECT id, owner_user_id FROM venues WHERE id = ${venueId} LIMIT 1`;
+  if (!venue.rows[0] || venue.rows[0].owner_user_id !== ownerUserId) {
+    const e: any = new Error('Not your venue');
+    e.status = 403;
+    throw e;
+  }
+  const result = await sql`
+    INSERT INTO vendors (venue_id, name, business_type, status)
+    VALUES (${venueId}, ${name.trim().slice(0, 120)}, ${businessType}, 'approved')
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getMyVendor(ownerUserId: number) {
+  const result = await sql`
+    SELECT * FROM vendors WHERE owner_user_id = ${ownerUserId} AND venue_id IS NULL
+    ORDER BY created_at DESC LIMIT 1
+  `;
+  return result.rows[0] || null;
+}
+
+export async function getApprovedStandaloneVendors() {
+  const result = await sql`
+    SELECT ve.*, COUNT(m.id)::int AS item_count
+    FROM vendors ve
+    LEFT JOIN vendor_menu_items m ON m.vendor_id = ve.id
+    WHERE ve.status = 'approved' AND ve.venue_id IS NULL
+    GROUP BY ve.id
+    ORDER BY ve.created_at DESC
+    LIMIT 100
+  `;
+  return result.rows;
+}
+
+export async function getVendorDetail(vendorId: number) {
+  const vendorResult = await sql`SELECT * FROM vendors WHERE id = ${vendorId} LIMIT 1`;
+  const vendor = vendorResult.rows[0];
+  if (!vendor) return null;
+  const items = await sql`
+    SELECT * FROM vendor_menu_items WHERE vendor_id = ${vendorId} ORDER BY created_at ASC
+  `;
+  let venue = null;
+  if (vendor.venue_id) {
+    const venueResult = await sql`SELECT id, name, venue_type FROM venues WHERE id = ${vendor.venue_id} LIMIT 1`;
+    venue = venueResult.rows[0] || null;
+  }
+  return { vendor, items: items.rows, venue };
+}
+
+// True when the user may edit this vendor's menu: they own the vendor, or
+// they own the venue the vendor belongs to.
+export async function canManageVendor(userId: number, vendorId: number): Promise<boolean> {
+  const result = await sql`
+    SELECT 1 FROM vendors ve
+    LEFT JOIN venues v ON v.id = ve.venue_id
+    WHERE ve.id = ${vendorId} AND (ve.owner_user_id = ${userId} OR v.owner_user_id = ${userId})
+    LIMIT 1
+  `;
+  return result.rows.length > 0;
+}
+
+export async function addVendorMenuItem(vendorId: number, opts: {
+  name: string; price: number; description?: string | null; emoji?: string | null;
+}) {
+  const result = await sql`
+    INSERT INTO vendor_menu_items (vendor_id, name, description, price, emoji)
+    VALUES (${vendorId}, ${opts.name.trim().slice(0, 120)}, ${opts.description?.trim().slice(0, 500) || null},
+            ${opts.price}, ${opts.emoji || '🍽️'})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function deleteVendorMenuItem(itemId: number, vendorId: number) {
+  await sql`DELETE FROM vendor_menu_items WHERE id = ${itemId} AND vendor_id = ${vendorId}`;
+  return { success: true };
+}
+
+// Menu form invites. The token is the secret — anyone holding the link can
+// fill in that one vendor's menu once.
+export async function createMenuInvite(vendorId: number) {
+  const token = crypto.randomUUID().replace(/-/g, '');
+  const result = await sql`
+    INSERT INTO vendor_menu_invites (token, vendor_id)
+    VALUES (${token}, ${vendorId})
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function getMenuInvite(token: string) {
+  const result = await sql`
+    SELECT i.token, i.submitted_at, ve.id AS vendor_id, ve.name AS vendor_name,
+           ve.business_type, v.name AS venue_name, v.venue_type
+    FROM vendor_menu_invites i
+    JOIN vendors ve ON ve.id = i.vendor_id
+    LEFT JOIN venues v ON v.id = ve.venue_id
+    WHERE i.token = ${token}
+    LIMIT 1
+  `;
+  return result.rows[0] || null;
+}
+
+export async function submitMenuInvite(token: string, items: { name: string; price: number; description?: string | null }[], vendorDescription?: string | null) {
+  const invite = await getMenuInvite(token);
+  if (!invite) {
+    const e: any = new Error('This menu form link is not valid');
+    e.status = 404;
+    throw e;
+  }
+  if (invite.submitted_at) {
+    const e: any = new Error('This menu form was already submitted');
+    e.status = 409;
+    throw e;
+  }
+  for (const item of items.slice(0, 60)) {
+    await addVendorMenuItem(invite.vendor_id, item);
+  }
+  if (vendorDescription?.trim()) {
+    await sql`UPDATE vendors SET description = ${vendorDescription.trim().slice(0, 1000)} WHERE id = ${invite.vendor_id}`;
+  }
+  await sql`UPDATE vendor_menu_invites SET submitted_at = CURRENT_TIMESTAMP WHERE token = ${token}`;
+  return { success: true, vendorId: invite.vendor_id };
+}
+
+// Admin: standalone business applications awaiting review.
+export async function getVendorApplications() {
+  const result = await sql`
+    SELECT ve.*, u.name AS owner_name, u.email AS owner_email
+    FROM vendors ve
+    LEFT JOIN users u ON u.id = ve.owner_user_id
+    WHERE ve.venue_id IS NULL AND ve.status = 'pending'
+    ORDER BY ve.created_at ASC
+  `;
+  return result.rows;
+}
+
+export async function setVendorStatus(vendorId: number, status: 'approved' | 'rejected') {
+  const result = await sql`
+    UPDATE vendors SET status = ${status} WHERE id = ${vendorId} RETURNING *
   `;
   return result.rows[0] || null;
 }
