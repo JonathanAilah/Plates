@@ -1593,6 +1593,38 @@ export async function getAllUsersForAdmin(filter?: string, search?: string) {
   return result.rows;
 }
 
+// Approved sellers, filterable by kitchen type ("Where do you cook?"),
+// kitchen condition flag, and how soon their earliest pickup is.
+export async function getSellersForAdmin(opts: {
+  environment?: string | null;
+  flag?: string | null;
+  maxPickupMin?: number | null;
+} = {}) {
+  const params: unknown[] = [];
+  let where = "WHERE seller_status = 'approved'";
+  if (opts.environment) {
+    params.push(opts.environment);
+    where += ` AND kitchen_environment = $${params.length}`;
+  }
+  if (opts.flag) {
+    params.push(`%${opts.flag}%`);
+    where += ` AND kitchen_flags LIKE $${params.length}`;
+  }
+  if (opts.maxPickupMin) {
+    params.push(opts.maxPickupMin);
+    where += ` AND pickup_min_minutes IS NOT NULL AND pickup_min_minutes <= $${params.length}`;
+  }
+  const result = await sql.query(
+    `SELECT id, name, email, avatar, photo_url, kitchen_name, kitchen_environment,
+            kitchen_flags, pickup_min_minutes, pickup_max_minutes, cooking_hours, created_at
+     FROM users ${where}
+     ORDER BY created_at DESC
+     LIMIT 200`,
+    params,
+  );
+  return result.rows;
+}
+
 export async function getUserDetailForAdmin(userId: number) {
   const userResult = await sql`SELECT * FROM users WHERE id = ${userId} LIMIT 1`;
   const user = userResult.rows[0];
@@ -1649,6 +1681,7 @@ export async function getAdminStats() {
   const orphanDishes = await sql`SELECT COUNT(*)::int as c FROM dishes WHERE photo_url IS NULL`;
 
   const openBugs = await sql`SELECT COUNT(*)::int as c FROM bug_reports WHERE status = 'open'`;
+  const resolvedBugs = await sql`SELECT COUNT(*)::int as c FROM bug_reports WHERE status = 'resolved'`;
 
   return {
     pending: pending.rows[0].c,
@@ -1660,6 +1693,7 @@ export async function getAdminStats() {
     totalOrders: totalOrders.rows[0].c,
     orphanDishes: orphanDishes.rows[0].c,
     openBugs: openBugs.rows[0].c,
+    resolvedBugs: resolvedBugs.rows[0].c,
   };
 }
 
