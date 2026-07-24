@@ -116,6 +116,8 @@ async function runMigrations(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_vendor_menu_vendor ON vendor_menu_items(vendor_id)`;
     // Shareable menu form: a festival owner sends the tokenized link to a
     // vendor; the submitted items land under that vendor's tab.
+    await sql`ALTER TABLE venues ADD COLUMN IF NOT EXISTS photo_url TEXT`;
+    await sql`ALTER TABLE vendor_menu_items ADD COLUMN IF NOT EXISTS photo_url TEXT`;
     await sql`
       CREATE TABLE IF NOT EXISTS vendor_menu_invites (
         token TEXT PRIMARY KEY,
@@ -2727,12 +2729,12 @@ export async function canManageVendor(userId: number, vendorId: number): Promise
 }
 
 export async function addVendorMenuItem(vendorId: number, opts: {
-  name: string; price: number; description?: string | null; emoji?: string | null;
+  name: string; price: number; description?: string | null; emoji?: string | null; photoUrl?: string | null;
 }) {
   const result = await sql`
-    INSERT INTO vendor_menu_items (vendor_id, name, description, price, emoji)
+    INSERT INTO vendor_menu_items (vendor_id, name, description, price, emoji, photo_url)
     VALUES (${vendorId}, ${opts.name.trim().slice(0, 120)}, ${opts.description?.trim().slice(0, 500) || null},
-            ${opts.price}, ${opts.emoji || '🍽️'})
+            ${opts.price}, ${opts.emoji || '🍽️'}, ${opts.photoUrl || null})
     RETURNING *
   `;
   return result.rows[0];
@@ -2788,6 +2790,65 @@ export async function submitMenuInvite(token: string, items: { name: string; pri
   }
   await sql`UPDATE vendor_menu_invites SET submitted_at = CURRENT_TIMESTAMP WHERE token = ${token}`;
   return { success: true, vendorId: invite.vendor_id };
+}
+
+// Venue owner edits: details/photo, cancelling the event, removing vendors.
+export async function updateVenue(ownerUserId: number, venueId: number, opts: {
+  name?: string | null; description?: string | null; location?: string | null;
+  startsOn?: string | null; endsOn?: string | null; photoUrl?: string | null;
+}) {
+  const existing = await sql`SELECT * FROM venues WHERE id = ${venueId} LIMIT 1`;
+  const venue = existing.rows[0];
+  if (!venue || venue.owner_user_id !== ownerUserId) {
+    const e: any = new Error('Not your venue');
+    e.status = 403;
+    throw e;
+  }
+  const result = await sql`
+    UPDATE venues SET
+      name = ${opts.name?.trim().slice(0, 120) || venue.name},
+      description = ${opts.description !== undefined ? (opts.description?.trim().slice(0, 1000) || null) : venue.description},
+      location = ${opts.location !== undefined ? (opts.location?.trim().slice(0, 200) || null) : venue.location},
+      starts_on = ${opts.startsOn !== undefined ? (opts.startsOn || null) : venue.starts_on},
+      ends_on = ${opts.endsOn !== undefined ? (opts.endsOn || null) : venue.ends_on},
+      photo_url = ${opts.photoUrl !== undefined ? (opts.photoUrl || null) : venue.photo_url}
+    WHERE id = ${venueId}
+    RETURNING *
+  `;
+  return result.rows[0];
+}
+
+export async function cancelVenue(ownerUserId: number, venueId: number) {
+  const existing = await sql`SELECT owner_user_id FROM venues WHERE id = ${venueId} LIMIT 1`;
+  if (!existing.rows[0] || existing.rows[0].owner_user_id !== ownerUserId) {
+    const e: any = new Error('Not your venue');
+    e.status = 403;
+    throw e;
+  }
+  const result = await sql`
+    UPDATE venues SET status = 'cancelled' WHERE id = ${venueId} RETURNING *
+  `;
+  return result.rows[0];
+}
+
+// Remove a vendor listing from a venue (owner only) along with its menu
+// items and any outstanding menu-form invites.
+export async function removeVenueVendor(ownerUserId: number, vendorId: number) {
+  const check = await sql`
+    SELECT ve.id FROM vendors ve
+    JOIN venues v ON v.id = ve.venue_id
+    WHERE ve.id = ${vendorId} AND v.owner_user_id = ${ownerUserId}
+    LIMIT 1
+  `;
+  if (!check.rows[0]) {
+    const e: any = new Error('Not your venue');
+    e.status = 403;
+    throw e;
+  }
+  await sql`DELETE FROM vendor_menu_items WHERE vendor_id = ${vendorId}`;
+  await sql`DELETE FROM vendor_menu_invites WHERE vendor_id = ${vendorId}`;
+  await sql`DELETE FROM vendors WHERE id = ${vendorId}`;
+  return { success: true };
 }
 
 // Admin: standalone business applications awaiting review.

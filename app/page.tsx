@@ -16,6 +16,12 @@ import SkipTheLineIntro from '@/components/SkipTheLineIntro';
 const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 const AddressAutocomplete = dynamic(() => import('@/components/AddressAutocomplete'), { ssr: false });
 const CheckoutPayment = dynamic(() => import('@/components/CheckoutPayment'), { ssr: false });
+const QrReceipt = dynamic(() => import('@/components/QrReceipt'), { ssr: false });
+const QrScanner = dynamic(() => import('@/components/QrScanner'), { ssr: false });
+
+// Raw photo size limit — files are resized before upload, but huge originals
+// stall phones, so reject them up front.
+const MAX_PHOTO_MB = 10;
 
 // Staff tiers. The chief admin (role 'admin') sees everything and manages all
 // roles. Admins (role 'secondary_admin') see everything except financials and
@@ -783,7 +789,20 @@ export default function Home() {
   const [stlItemPrice, setStlItemPrice] = useState('');
   const [stlItemDesc, setStlItemDesc] = useState('');
   const [stlItemForVendor, setStlItemForVendor] = useState<number | null>(null);
+  const [stlItemPhotoFile, setStlItemPhotoFile] = useState<File | null>(null);
+  const stlItemPhotoInputRef = useRef<HTMLInputElement>(null);
   const [adminVendorApps, setAdminVendorApps] = useState<any[]>([]);
+  // Venue page mode: menu (details) / edit / cancel — owner only for the last two
+  const [stlVenueMode, setStlVenueMode] = useState<'details' | 'edit' | 'cancel'>('details');
+  const [stlEditName, setStlEditName] = useState('');
+  const [stlEditLocation, setStlEditLocation] = useState('');
+  const [stlEditDesc, setStlEditDesc] = useState('');
+  const [stlEditStart, setStlEditStart] = useState('');
+  const [stlEditEnd, setStlEditEnd] = useState('');
+  const [stlEditPhotoFile, setStlEditPhotoFile] = useState<File | null>(null);
+  const stlEditPhotoInputRef = useRef<HTMLInputElement>(null);
+  // Kitchen queue QR pickup scanner
+  const [showQrScanner, setShowQrScanner] = useState(false);
   const [posts, setPosts] = useState<Post[]>([]);
   const [composerText, setComposerText] = useState('');
   const [composerPhoto, setComposerPhoto] = useState<string | null>(null);
@@ -951,6 +970,7 @@ export default function Home() {
       setStlVenueDetail(data);
       setStlVenueTab('all');
       setStlItemForVendor(null);
+      setStlVenueMode('details');
       setScreen('stl-venue');
     } catch (e) { console.error('STL venue error:', e); }
   };
@@ -1048,6 +1068,86 @@ export default function Home() {
     }
   };
 
+  const pickPhotoFile = (f: File | null, set: (f: File | null) => void) => {
+    if (f && f.size > MAX_PHOTO_MB * 1024 * 1024) {
+      showToast(`Photos must be under ${MAX_PHOTO_MB} MB`);
+      return;
+    }
+    set(f);
+  };
+
+  const enterVenueEdit = () => {
+    const v = stlVenueDetail?.venue;
+    if (!v) return;
+    setStlEditName(v.name || '');
+    setStlEditLocation(v.location || '');
+    setStlEditDesc(v.description || '');
+    setStlEditStart(v.starts_on ? String(v.starts_on).slice(0, 10) : '');
+    setStlEditEnd(v.ends_on ? String(v.ends_on).slice(0, 10) : '');
+    setStlEditPhotoFile(null);
+    setStlVenueMode('edit');
+  };
+
+  const saveVenueEdits = async () => {
+    const v = stlVenueDetail?.venue;
+    if (!v || stlSubmitting) return;
+    if (stlEditName.trim().length < 2) { showToast('Event name required'); return; }
+    setStlSubmitting(true);
+    try {
+      let photoUrl: string | null | undefined = undefined; // undefined = keep current
+      if (stlEditPhotoFile) {
+        photoUrl = await uploadImage(stlEditPhotoFile);
+        if (!photoUrl) { showToast('Photo upload failed — try again'); return; }
+      }
+      const updated = await stlPost({
+        action: 'updateVenue',
+        venueId: v.id,
+        name: stlEditName.trim(),
+        description: stlEditDesc.trim() || null,
+        location: stlEditLocation.trim() || null,
+        startsOn: stlEditStart || null,
+        endsOn: stlEditEnd || null,
+        ...(photoUrl !== undefined ? { photoUrl } : {}),
+      });
+      if (updated) {
+        showToast('Event updated');
+        setStlVenueMode('details');
+        setStlEditPhotoFile(null);
+        await refreshStlVenue(v.id);
+        await loadStlBrowse();
+      }
+    } finally {
+      setStlSubmitting(false);
+    }
+  };
+
+  const cancelVenueAction = async () => {
+    const v = stlVenueDetail?.venue;
+    if (!v || stlSubmitting) return;
+    setStlSubmitting(true);
+    try {
+      const result = await stlPost({ action: 'cancelVenue', venueId: v.id });
+      if (result) {
+        showToast('Event cancelled');
+        setStlVenueMode('details');
+        setScreen('feed');
+        await loadStlBrowse();
+      }
+    } finally {
+      setStlSubmitting(false);
+    }
+  };
+
+  const removeStlVendor = async (venueId: number, vendorId: number, vendorName: string) => {
+    if (!confirm(`Remove ${vendorName} and their menu from this event?`)) return;
+    const result = await stlPost({ action: 'removeVendor', vendorId });
+    if (result) {
+      showToast('Vendor removed');
+      setStlVenueTab('all');
+      await refreshStlVenue(venueId);
+    }
+  };
+
   const addStlVenueVendor = async (venueId: number) => {
     if (stlNewVendorName.trim().length < 2) { showToast('Enter the vendor’s name'); return; }
     const vendor = await stlPost({ action: 'addVenueVendor', venueId, name: stlNewVendorName.trim(), businessType: stlNewVendorType });
@@ -1061,11 +1161,28 @@ export default function Home() {
   const addStlMenuItem = async (vendorId: number, refresh: () => Promise<void>) => {
     const price = parseFloat(stlItemPrice);
     if (!stlItemName.trim() || !(price > 0)) { showToast('Item name and price required'); return; }
-    const item = await stlPost({ action: 'addMenuItem', vendorId, name: stlItemName.trim(), price, description: stlItemDesc.trim() || null });
+    let photoUrl: string | null = null;
+    if (stlItemPhotoFile) {
+      photoUrl = await uploadImage(stlItemPhotoFile);
+      if (!photoUrl) { showToast('Photo upload failed — item not added'); return; }
+    }
+    const item = await stlPost({ action: 'addMenuItem', vendorId, name: stlItemName.trim(), price, description: stlItemDesc.trim() || null, photoUrl });
     if (item) {
-      setStlItemName(''); setStlItemPrice(''); setStlItemDesc('');
+      setStlItemName(''); setStlItemPrice(''); setStlItemDesc(''); setStlItemPhotoFile(null);
       await refresh();
     }
+  };
+
+  // Kitchen queue QR scan → confirm pickup. The QR encodes
+  // plates:pickup:<orderId>:<4-digit code>, generated on the buyer's receipt.
+  const handleQrScan = (text: string) => {
+    setShowQrScanner(false);
+    const m = text.match(/^plates:pickup:([\w-]+):(\d{4})$/);
+    if (!m) {
+      showToast("That's not a Plates pickup code");
+      return;
+    }
+    confirmPickupWithCode(m[1], m[2]);
   };
 
   const deleteStlMenuItem = async (vendorId: number, itemId: number, refresh: () => Promise<void>) => {
@@ -2617,7 +2734,9 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) {
         if (data.codeMismatch) {
-          // Trigger shake animation + clear inputs
+          // Trigger shake animation + clear inputs (also covers QR scans,
+          // where the code boxes aren't on screen)
+          showToast("Code doesn't match this order");
           setPickupCodeError(true);
           setPickupCodeInput(['', '', '', '']);
           setTimeout(() => {
@@ -4090,9 +4209,13 @@ export default function Home() {
                   <div style={{ font: `500 12px ${font.sans}`, color: C.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>Festivals &amp; events</div>
                   {(stlData?.venues || []).map((v: any) => (
                     <button key={v.id} onClick={() => openStlVenue(v.id)} style={{ width: '100%', background: C.card, borderRadius: 14, padding: 14, marginBottom: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
-                      <div style={{ width: 42, height: 42, borderRadius: 12, background: C.terracottaLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flex: 'none' }}>
-                        {v.venue_type === 'stadium' ? '🏟️' : v.venue_type === 'concert' ? '🎤' : v.venue_type === 'fair' ? '🎡' : '🎪'}
-                      </div>
+                      {v.photo_url ? (
+                        <span style={{ width: 42, height: 42, borderRadius: 12, backgroundImage: `url(${v.photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center', flex: 'none' }} />
+                      ) : (
+                        <div style={{ width: 42, height: 42, borderRadius: 12, background: C.terracottaLight, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, flex: 'none' }}>
+                          {v.venue_type === 'stadium' ? '🏟️' : v.venue_type === 'concert' ? '🎤' : v.venue_type === 'fair' ? '🎡' : '🎪'}
+                        </div>
+                      )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{v.name}</div>
                         <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted }}>
@@ -4261,7 +4384,116 @@ export default function Home() {
                 )}
               </div>
 
+              {/* Owner mode tabs: details / edit / cancel */}
+              {isOwner && (
+                <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+                  {([
+                    { key: 'details', label: 'Event details' },
+                    { key: 'edit', label: 'Edit' },
+                    { key: 'cancel', label: 'Cancel event' },
+                  ] as const).map(t => (
+                    <button
+                      key={t.key}
+                      onClick={() => t.key === 'edit' ? enterVenueEdit() : setStlVenueMode(t.key)}
+                      style={{ padding: '7px 13px', background: stlVenueMode === t.key ? C.ink : C.card, color: stlVenueMode === t.key ? '#fff' : t.key === 'cancel' ? '#c94b4b' : C.inkSoft, border: `1px solid ${stlVenueMode === t.key ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}` }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {venue.status === 'cancelled' && (
+                <div style={{ background: '#fceded', border: '1px solid #f5b8b8', borderRadius: 12, padding: 12, marginBottom: 12, font: `500 12.5px ${font.sans}`, color: '#8a2a2a' }}>
+                  This event has been cancelled — it no longer appears in Skip the Line.
+                </div>
+              )}
+
+              {/* EDIT MODE */}
+              {isOwner && stlVenueMode === 'edit' && (
+                <div style={{ background: C.card, borderRadius: 14, padding: 16, marginBottom: 16, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Event photo</div>
+                  <div onClick={() => stlEditPhotoInputRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4, cursor: 'pointer' }}>
+                    <div style={{ width: 74, height: 74, borderRadius: 12, background: C.cardAlt, border: `1px dashed ${C.divider}`, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flex: 'none' }}>
+                      {stlEditPhotoFile ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={URL.createObjectURL(stlEditPhotoFile)} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : venue.photo_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={venue.photo_url} alt="event" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <Camera size={20} color={C.muted} />
+                      )}
+                    </div>
+                    <span style={{ font: `400 12.5px ${font.sans}`, color: C.muted }}>
+                      {stlEditPhotoFile ? stlEditPhotoFile.name : venue.photo_url ? 'Tap to replace the photo' : 'Tap to add a photo'}
+                    </span>
+                  </div>
+                  <input ref={stlEditPhotoInputRef} type="file" accept="image/*" onChange={(e) => pickPhotoFile(e.target.files?.[0] || null, setStlEditPhotoFile)} style={{ display: 'none' }} />
+                  <div style={{ font: `400 11px ${font.sans}`, color: C.muted, marginBottom: 12 }}>JPG or PNG, up to {MAX_PHOTO_MB} MB — we resize it for you.</div>
+
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Event name</div>
+                  <input type="text" value={stlEditName} onChange={(e) => setStlEditName(e.target.value)} maxLength={120} style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 10 }} />
+
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Location</div>
+                  <input type="text" value={stlEditLocation} onChange={(e) => setStlEditLocation(e.target.value)} maxLength={200} placeholder="Where is it?" style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 10 }} />
+
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>About the event</div>
+                  <textarea value={stlEditDesc} onChange={(e) => setStlEditDesc(e.target.value)} rows={2} maxLength={1000} placeholder="What should food lovers know?" style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `400 13.5px/1.5 ${font.sans}`, background: '#fff', marginBottom: 10, resize: 'none', fontFamily: font.sans }} />
+
+                  <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Dates</div>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14 }}>
+                    <input type="date" value={stlEditStart} onChange={(e) => setStlEditStart(e.target.value)} style={{ flex: 1, padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+                    <span style={{ color: C.muted, font: `400 13px ${font.sans}` }}>to</span>
+                    <input type="date" value={stlEditEnd} onChange={(e) => setStlEditEnd(e.target.value)} style={{ flex: 1, padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13px ${font.sans}`, background: '#fff' }} />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setStlVenueMode('details')} disabled={stlSubmitting} style={{ flex: 1, padding: 12, background: C.cardAlt, color: C.ink, borderRadius: 10, font: `500 13px ${font.sans}` }}>Cancel</button>
+                    <button onClick={saveVenueEdits} disabled={stlSubmitting} style={{ flex: 2, padding: 12, background: stlSubmitting ? C.cardAlt : C.terracotta, color: stlSubmitting ? C.muted : '#fff', borderRadius: 10, font: `500 13px ${font.sans}` }}>
+                      {stlSubmitting ? 'Saving…' : 'Save changes'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* CANCEL MODE */}
+              {isOwner && stlVenueMode === 'cancel' && (
+                <div style={{ background: '#fff5f5', border: '1px solid #c0392b', borderRadius: 14, padding: 16, marginBottom: 16 }}>
+                  <div style={{ font: `500 15px ${font.serif}`, color: '#c0392b', marginBottom: 6 }}>Cancel {venue.name}?</div>
+                  <div style={{ font: `400 12.5px/1.5 ${font.sans}`, color: C.ink, marginBottom: 12 }}>
+                    The event disappears from Skip the Line immediately. Vendors and menus stay saved, so if plans change you can ask us to restore it.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setStlVenueMode('details')} disabled={stlSubmitting} style={{ flex: 1, padding: 12, background: C.cardAlt, color: C.ink, borderRadius: 10, font: `500 13px ${font.sans}` }}>Keep event</button>
+                    <button onClick={cancelVenueAction} disabled={stlSubmitting || venue.status === 'cancelled'} style={{ flex: 1, padding: 12, background: '#c0392b', color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}`, opacity: venue.status === 'cancelled' ? .5 : 1 }}>
+                      {stlSubmitting ? 'Cancelling…' : 'Cancel event'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* DETAILS: photo + info */}
+              {stlVenueMode === 'details' && (venue.photo_url || venue.description || venue.starts_on) && (
+                <div style={{ marginBottom: 14 }}>
+                  {venue.photo_url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={venue.photo_url} alt={venue.name} style={{ width: '100%', height: 150, objectFit: 'cover', borderRadius: 14, marginBottom: 8 }} />
+                  )}
+                  {venue.description && (
+                    <div style={{ font: `400 13px/1.5 ${font.sans}`, color: C.inkSoft, marginBottom: 4 }}>{venue.description}</div>
+                  )}
+                  {venue.starts_on && (
+                    <div style={{ font: `400 12px ${font.sans}`, color: C.muted }}>
+                      {new Date(venue.starts_on).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                      {venue.ends_on ? ` – ${new Date(venue.ends_on).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Vendor tabs */}
+              {stlVenueMode === 'details' && (
               <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginBottom: 12, scrollbarWidth: 'none' as any }}>
                 <button onClick={() => setStlVenueTab('all')} style={{ flex: 'none', padding: '7px 14px', background: stlVenueTab === 'all' ? C.ink : C.card, color: stlVenueTab === 'all' ? '#fff' : C.inkSoft, border: `1px solid ${stlVenueTab === 'all' ? C.ink : C.divider}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
                   Full menu
@@ -4272,24 +4504,32 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+              )}
 
-              {vvs.length === 0 && (
+              {stlVenueMode === 'details' && vvs.length === 0 && (
                 <div style={{ padding: '24px 0', textAlign: 'center', color: C.muted, font: `400 13px ${font.sans}` }}>
                   No vendors yet{isOwner ? ' — add your first one below.' : '.'}
                 </div>
               )}
 
-              {shownVendors.map((v: any) => {
+              {stlVenueMode === 'details' && shownVendors.map((v: any) => {
                 const vendorItems = itemsFor(v.id);
                 const invite = isOwner ? pendingInvite(v.id) : null;
                 return (
                   <div key={v.id} style={{ marginBottom: 16 }}>
-                    <button onClick={() => openStlVendor(v.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, textAlign: 'left', background: 'transparent' }}>
-                      <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{v.name}</div>
-                      <span style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{BIZ_TYPE_LABEL[v.business_type] || ''}</span>
-                      <div style={{ flex: 1 }} />
-                      <ChevronRight size={14} color={C.muted} />
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <button onClick={() => openStlVendor(v.id)} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left', background: 'transparent', minWidth: 0 }}>
+                        <div style={{ font: `500 15px ${font.serif}`, color: C.ink }}>{v.name}</div>
+                        <span style={{ font: `400 11px ${font.sans}`, color: C.muted }}>{BIZ_TYPE_LABEL[v.business_type] || ''}</span>
+                        <div style={{ flex: 1 }} />
+                        <ChevronRight size={14} color={C.muted} />
+                      </button>
+                      {isOwner && (
+                        <button onClick={() => removeStlVendor(venue.id, v.id, v.name)} aria-label={`Remove ${v.name}`} style={{ flex: 'none', color: C.mutedLight, padding: 4 }}>
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
 
                     {vendorItems.length === 0 ? (
                       <div style={{ background: C.cardAlt, borderRadius: 10, padding: 12, font: `400 12px ${font.sans}`, color: C.muted }}>
@@ -4299,7 +4539,11 @@ export default function Home() {
                       <div style={{ background: C.card, borderRadius: 12, boxShadow: '0 2px 8px rgba(60,40,20,.05)', overflow: 'hidden' }}>
                         {vendorItems.map((item: any, idx: number) => (
                           <div key={item.id} onClick={() => openStlVendor(v.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 12, borderBottom: idx < vendorItems.length - 1 ? `1px solid ${C.hairline}` : 'none', cursor: 'pointer' }}>
-                            <span style={{ fontSize: 18, flex: 'none' }}>{item.emoji || '🍽️'}</span>
+                            {item.photo_url ? (
+                              <span style={{ width: 38, height: 38, borderRadius: 8, backgroundImage: `url(${item.photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center', flex: 'none' }} />
+                            ) : (
+                              <span style={{ fontSize: 18, flex: 'none' }}>{item.emoji || '🍽️'}</span>
+                            )}
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ font: `500 13.5px ${font.sans}`, color: C.ink }}>{item.name}</div>
                               {item.description && <div style={{ font: `400 11.5px ${font.sans}`, color: C.muted, marginTop: 1 }}>{item.description}</div>}
@@ -4340,6 +4584,10 @@ export default function Home() {
                               </div>
                             </div>
                             <input type="text" value={stlItemDesc} onChange={(e) => setStlItemDesc(e.target.value)} placeholder="Short description (optional)" style={{ width: '100%', padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `400 12.5px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+                            <button onClick={() => stlItemPhotoInputRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: C.surface, color: stlItemPhotoFile ? C.green : C.inkSoft, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 12px ${font.sans}`, marginBottom: 8 }}>
+                              <Camera size={13} /> {stlItemPhotoFile ? stlItemPhotoFile.name.slice(0, 24) : `Photo (optional, up to ${MAX_PHOTO_MB} MB)`}
+                            </button>
+                            <input ref={stlItemPhotoInputRef} type="file" accept="image/*" onChange={(e) => pickPhotoFile(e.target.files?.[0] || null, setStlItemPhotoFile)} style={{ display: 'none' }} />
                             <button onClick={() => addStlMenuItem(v.id, () => refreshStlVenue(venue.id))} style={{ width: '100%', padding: 10, background: C.ink, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}` }}>
                               Add to {v.name}&apos;s menu
                             </button>
@@ -4351,7 +4599,7 @@ export default function Home() {
                 );
               })}
 
-              {isOwner && (
+              {isOwner && stlVenueMode === 'details' && (
                 <div style={{ background: C.card, borderRadius: 14, padding: 14, marginTop: 8, boxShadow: '0 2px 8px rgba(60,40,20,.05)' }}>
                   <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8 }}>Add a vendor</div>
                   <input type="text" value={stlNewVendorName} onChange={(e) => setStlNewVendorName(e.target.value)} placeholder="Vendor name, e.g. Tino's Tacos" maxLength={120} style={{ width: '100%', padding: 11, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 13.5px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
@@ -4407,7 +4655,11 @@ export default function Home() {
                 <div style={{ background: C.card, borderRadius: 14, boxShadow: '0 2px 8px rgba(60,40,20,.05)', overflow: 'hidden', marginBottom: 12 }}>
                   {items.map((item: any, idx: number) => (
                     <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 13, borderBottom: idx < items.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
-                      <span style={{ fontSize: 20, flex: 'none' }}>{item.emoji || '🍽️'}</span>
+                      {item.photo_url ? (
+                        <span style={{ width: 46, height: 46, borderRadius: 10, backgroundImage: `url(${item.photo_url})`, backgroundSize: 'cover', backgroundPosition: 'center', flex: 'none' }} />
+                      ) : (
+                        <span style={{ fontSize: 20, flex: 'none' }}>{item.emoji || '🍽️'}</span>
+                      )}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ font: `500 14px ${font.sans}`, color: C.ink }}>{item.name}</div>
                         {item.description && <div style={{ font: `400 12px ${font.sans}`, color: C.muted, marginTop: 1 }}>{item.description}</div>}
@@ -4433,6 +4685,10 @@ export default function Home() {
                     </div>
                   </div>
                   <input type="text" value={stlItemDesc} onChange={(e) => setStlItemDesc(e.target.value)} placeholder="Short description (optional)" style={{ width: '100%', padding: 10, border: `1px solid ${C.divider}`, borderRadius: 10, font: `400 12.5px ${font.sans}`, background: '#fff', marginBottom: 8 }} />
+                  <button onClick={() => stlItemPhotoInputRef.current?.click()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', background: C.surface, color: stlItemPhotoFile ? C.green : C.inkSoft, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 12px ${font.sans}`, marginBottom: 8 }}>
+                    <Camera size={13} /> {stlItemPhotoFile ? stlItemPhotoFile.name.slice(0, 24) : `Photo (optional, up to ${MAX_PHOTO_MB} MB)`}
+                  </button>
+                  <input ref={stlItemPhotoInputRef} type="file" accept="image/*" onChange={(e) => pickPhotoFile(e.target.files?.[0] || null, setStlItemPhotoFile)} style={{ display: 'none' }} />
                   <button onClick={() => addStlMenuItem(vendor.id, () => refreshStlVendor(vendor.id))} style={{ width: '100%', padding: 11, background: C.ink, color: '#fff', borderRadius: 10, font: `500 13px ${font.sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                     <Plus size={14} /> Add menu item
                   </button>
@@ -5949,12 +6205,17 @@ export default function Home() {
                 );
               })()}
 
-              {/* Pickup code, once ready */}
+              {/* Pickup code + QR receipt, once ready. The cook scans the QR
+                  (or types the 4 digits) to confirm the right person picked up. */}
               {o.status === 'ready' && o.pickup_code && (
                 <div style={{ padding: '14px 22px 0' }}>
                   <div style={{ background: C.greenLight, borderRadius: 14, padding: 16, textAlign: 'center' }}>
-                    <div style={{ font: `500 12px ${font.sans}`, color: C.green, marginBottom: 6 }}>Show this code at pickup</div>
-                    <div style={{ font: `600 32px/1 ${font.serif}`, color: C.green, letterSpacing: '.15em' }}>{o.pickup_code}</div>
+                    <div style={{ font: `500 12px ${font.sans}`, color: C.green, marginBottom: 10 }}>Show this at pickup</div>
+                    <QrReceipt value={`plates:pickup:${o.id}:${o.pickup_code}`} size={170} />
+                    <div style={{ font: `600 26px/1 ${font.serif}`, color: C.green, letterSpacing: '.15em', marginTop: 12 }}>{o.pickup_code}</div>
+                    <div style={{ font: `400 11px ${font.sans}`, color: C.green, marginTop: 6, opacity: .85 }}>
+                      They can scan the code or type the digits — either works.
+                    </div>
                   </div>
                 </div>
               )}
@@ -6121,7 +6382,10 @@ export default function Home() {
               <button onClick={() => setScreen('seller-dashboard')} style={{ width: 36, height: 36, borderRadius: '50%', background: C.cardAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.ink }}>
                 <ArrowLeft size={18} />
               </button>
-              <div style={{ font: `500 22px ${font.serif}`, color: C.ink }}>Kitchen queue</div>
+              <div style={{ flex: 1, font: `500 22px ${font.serif}`, color: C.ink }}>Kitchen queue</div>
+              <button onClick={() => setShowQrScanner(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: C.ink, color: '#fff', borderRadius: 10, font: `500 12.5px ${font.sans}` }}>
+                <Camera size={14} /> Scan QR
+              </button>
             </div>
 
             {cookOrders.length === 0 ? (
@@ -7836,6 +8100,9 @@ export default function Home() {
 
         {/* ================= SKIP THE LINE INTRO ================= */}
         {showStlIntro && <SkipTheLineIntro onDone={dismissStlIntro} />}
+
+        {/* ================= QR PICKUP SCANNER ================= */}
+        {showQrScanner && <QrScanner onScan={handleQrScan} onClose={() => setShowQrScanner(false)} />}
 
         {/* ================= REPORT A BUG SHEET ================= */}
         {showBugSheet && (
