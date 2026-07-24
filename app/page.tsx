@@ -6,6 +6,7 @@ import { SignInButton, SignedIn, SignedOut, UserButton, useUser, useAuth } from 
 import dynamic from 'next/dynamic';
 import { CURRENT_TERMS_VERSION } from '@/lib/legal';
 import { parseSides, sidePriceFor } from '@/lib/sides';
+import { FOOD_TAGS, MAX_DISH_TAGS, KITCHEN_CONDITION_FILTERS, conditionLabel } from '@/lib/tags';
 import MarketingIntro from '@/components/MarketingIntro';
 import WelcomeChooser from '@/components/WelcomeChooser';
 
@@ -54,6 +55,7 @@ interface Dish {
   sides?: string | null;
   sell_start?: string | null;
   sell_end?: string | null;
+  tags?: string | null;
 }
 
 interface Review {
@@ -611,6 +613,7 @@ export default function Home() {
   // Each side is its own line item with a price that's added to the meal
   // total when the buyer picks it. Prices stay as strings while typing.
   const [newDishSides, setNewDishSides] = useState<{ name: string; price: string }[]>([]);
+  const [newDishTags, setNewDishTags] = useState<string[]>([]);
   const [newDishSellStart, setNewDishSellStart] = useState('');
   const [newDishSellEnd, setNewDishSellEnd] = useState('');
   const [mealSide, setMealSide] = useState<string | null>(null);
@@ -737,7 +740,8 @@ export default function Home() {
   // Discover search + filters
   const [searchQuery, setSearchQuery] = useState('');
   const [distanceFilter, setDistanceFilter] = useState<'any' | '1mi' | '3mi' | '5mi'>('any');
-  const [dietaryFilter, setDietaryFilter] = useState<string[]>([]); // e.g. ['Nut-free', 'Gluten-free']
+  const [dietaryFilter, setDietaryFilter] = useState<string[]>([]); // kitchen-condition keys, e.g. ['nut-free', 'no-pets']
+  const [foodTypeFilter, setFoodTypeFilter] = useState<string[]>([]); // FOOD_TAGS names — dish matches ANY selected
   const [ratingFilter, setRatingFilter] = useState<'any' | '4plus' | '4half'>('any');
   const [showFilterPanel, setShowFilterPanel] = useState(false);
 
@@ -2318,6 +2322,7 @@ export default function Home() {
           sides: newDishSides
             .map(s => ({ name: s.name.trim(), price: Math.max(0, parseFloat(s.price) || 0) }))
             .filter(s => s.name),
+          tags: newDishTags,
           sellStart: sellStart || null,
           sellEnd: sellEnd || null,
         }),
@@ -2340,6 +2345,7 @@ export default function Home() {
       setDishPhotoPreview(null);
       setNewDishDescription('');
       setNewDishSides([]);
+      setNewDishTags([]);
       setNewDishSellStart('');
       setNewDishSellEnd('');
       if (dishFileInputRef.current) dishFileInputRef.current.value = '';
@@ -2776,17 +2782,8 @@ export default function Home() {
   // These must be declared BEFORE any `if (loading) return` or `if (!user) return`.
   // Guarded against null user.
 
-  const availableDietaryTags = React.useMemo(() => {
-    const set = new Set<string>();
-    for (const d of dishes) {
-      if (d.seller_kitchen_flags) {
-        d.seller_kitchen_flags.split(',').map(f => f.trim()).filter(Boolean).forEach(f => set.add(f));
-      }
-    }
-    return Array.from(set).sort();
-  }, [dishes]);
 
-  const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length;
+  const activeFilterCount = (distanceFilter !== 'any' ? 1 : 0) + (ratingFilter !== 'any' ? 1 : 0) + dietaryFilter.length + foodTypeFilter.length;
 
   const filteredDishes = React.useMemo(() => {
     // When searching, results come from the server (whole catalog); otherwise
@@ -2806,15 +2803,24 @@ export default function Home() {
         if (avg < threshold) return false;
       }
       if (dietaryFilter.length > 0) {
-        const dishTags = (d.seller_kitchen_flags || '').split(',').map(f => f.trim());
-        for (const tag of dietaryFilter) {
-          if (!dishTags.includes(tag)) return false;
+        // Kitchen conditions: 'nut-free'/'gluten-free' must be flagged by the
+        // cook; 'no-pets'/'no-smokers' require the flag to be absent.
+        const flags = (d.seller_kitchen_flags || '').split(',').map(f => f.trim());
+        for (const cond of dietaryFilter) {
+          if (cond === 'no-pets') { if (flags.includes('pets')) return false; }
+          else if (cond === 'no-smokers') { if (flags.includes('smokers')) return false; }
+          else if (!flags.includes(cond)) return false;
         }
+      }
+      if (foodTypeFilter.length > 0) {
+        // Food type: the dish matches if it carries ANY selected tag
+        const dishTags = (d.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+        if (!foodTypeFilter.some(t => dishTags.includes(t))) return false;
       }
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dishes, searchResults, searchQuery, distanceFilter, ratingFilter, dietaryFilter, user?.latitude, user?.longitude]);
+  }, [dishes, searchResults, searchQuery, distanceFilter, ratingFilter, dietaryFilter, foodTypeFilter, user?.latitude, user?.longitude]);
 
   const isFiltering = searchQuery.trim().length > 0 || activeFilterCount > 0;
 
@@ -3072,11 +3078,16 @@ export default function Home() {
   const clearFilters = () => {
     setDistanceFilter('any');
     setDietaryFilter([]);
+    setFoodTypeFilter([]);
     setRatingFilter('any');
   };
 
   const toggleDietaryTag = (tag: string) => {
     setDietaryFilter(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
+  };
+
+  const toggleFoodTag = (tag: string) => {
+    setFoodTypeFilter(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
   };
 
   const statusLabels: Record<OrderStatus, string> = {
@@ -3308,9 +3319,15 @@ export default function Home() {
                     <X size={12} />
                   </button>
                 )}
+                {foodTypeFilter.map(tag => (
+                  <button key={tag} onClick={() => toggleFoodTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
+                    {tag}
+                    <X size={12} />
+                  </button>
+                ))}
                 {dietaryFilter.map(tag => (
                   <button key={tag} onClick={() => toggleDietaryTag(tag)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: C.terracotta, color: '#fff', border: `1px solid ${C.terracotta}`, borderRadius: 16, font: `500 12px ${font.sans}`, whiteSpace: 'nowrap' }}>
-                    {tag}
+                    {conditionLabel(tag)}
                     <X size={12} />
                   </button>
                 ))}
@@ -3819,6 +3836,9 @@ export default function Home() {
                   </span>
                 )}
                 <span style={{ background: C.cardAlt, color: C.inkSoft, padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>Homemade</span>
+                {(selectedDish.tags || '').split(',').map(t => t.trim()).filter(Boolean).map(tag => (
+                  <span key={tag} style={{ background: C.terracottaLight, color: C.terracotta, padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>{tag}</span>
+                ))}
                 {selectedDish.is_catering && (
                   <span style={{ background: C.green, color: '#fff', padding: '5px 10px', borderRadius: 8, font: `500 11px ${font.sans}` }}>Catering · pick your date at checkout</span>
                 )}
@@ -4769,6 +4789,27 @@ export default function Home() {
                   placeholder="What's in it? How's it made? Spice level, portion size…"
                   style={{ width: '100%', padding: 12, border: `1px solid ${C.divider}`, borderRadius: 10, font: `500 14px ${font.sans}`, background: '#fff', marginBottom: 8, resize: 'none', fontFamily: font.sans }}
                 />
+
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Food type tags (optional, up to {MAX_DISH_TAGS})</div>
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 4 }}>
+                  {FOOD_TAGS.map(tag => {
+                    const selected = newDishTags.includes(tag);
+                    const full = !selected && newDishTags.length >= MAX_DISH_TAGS;
+                    return (
+                      <button
+                        key={tag}
+                        onClick={() => setNewDishTags(prev => selected ? prev.filter(t => t !== tag) : prev.length >= MAX_DISH_TAGS ? prev : [...prev, tag])}
+                        disabled={full}
+                        style={{ padding: '6px 11px', background: selected ? C.terracotta : '#fff', color: selected ? '#fff' : full ? C.mutedLight : C.inkSoft, border: `1px solid ${selected ? C.terracotta : C.divider}`, borderRadius: 14, font: `500 11.5px ${font.sans}` }}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ font: `400 11.5px/1.4 ${font.sans}`, color: C.muted, marginBottom: 10 }}>
+                  Buyers filter the feed by these tags — tagged dishes get found.
+                </div>
 
                 <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 6 }}>Side options (optional)</div>
                 {newDishSides.map((s, i) => (
@@ -7286,36 +7327,59 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Dietary tags */}
+              {/* Food type */}
               <div style={{ marginBottom: 18 }}>
-                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Kitchen tags</div>
-                {availableDietaryTags.length === 0 ? (
-                  <div style={{ font: `400 12px ${font.sans}`, color: C.muted }}>
-                    No cooks have set dietary tags yet.
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {availableDietaryTags.map(tag => {
-                      const selected = dietaryFilter.includes(tag);
-                      return (
-                        <button
-                          key={tag}
-                          onClick={() => toggleDietaryTag(tag)}
-                          style={{
-                            padding: '8px 14px',
-                            background: selected ? C.ink : C.surface,
-                            color: selected ? '#fff' : C.inkSoft,
-                            border: `1px solid ${selected ? C.ink : C.divider}`,
-                            borderRadius: 16,
-                            font: `500 12px ${font.sans}`,
-                          }}
-                        >
-                          {tag}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Food type</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {FOOD_TAGS.map(tag => {
+                    const selected = foodTypeFilter.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        onClick={() => toggleFoodTag(tag)}
+                        style={{
+                          padding: '8px 14px',
+                          background: selected ? C.ink : C.surface,
+                          color: selected ? '#fff' : C.inkSoft,
+                          border: `1px solid ${selected ? C.ink : C.divider}`,
+                          borderRadius: 16,
+                          font: `500 12px ${font.sans}`,
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 8, font: `400 11px ${font.sans}`, color: C.muted }}>
+                  Pick more than one to see dishes matching any of them. Cooks tag dishes when posting, so untagged dishes won&apos;t match.
+                </div>
+              </div>
+
+              {/* Kitchen conditions */}
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ font: `500 13px ${font.sans}`, color: C.inkSoft, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.05em' }}>Kitchen conditions</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {KITCHEN_CONDITION_FILTERS.map(cond => {
+                    const selected = dietaryFilter.includes(cond.key);
+                    return (
+                      <button
+                        key={cond.key}
+                        onClick={() => toggleDietaryTag(cond.key)}
+                        style={{
+                          padding: '8px 14px',
+                          background: selected ? C.ink : C.surface,
+                          color: selected ? '#fff' : C.inkSoft,
+                          border: `1px solid ${selected ? C.ink : C.divider}`,
+                          borderRadius: 16,
+                          font: `500 12px ${font.sans}`,
+                        }}
+                      >
+                        {cond.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <button

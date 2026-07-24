@@ -135,6 +135,8 @@ async function runMigrations(): Promise<void> {
     // Dish extras: optional side options (comma-separated) and a daily
     // selling window (HH:MM, 24h) within the cook's stated cooking hours.
     await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS sides TEXT`;
+    // Comma-separated food-type tags (from lib/tags.ts) for feed filtering
+    await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS tags TEXT`;
     await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS sell_start TEXT`;
     await sql`ALTER TABLE dishes ADD COLUMN IF NOT EXISTS sell_end TEXT`;
     // Buyer's chosen side rides the cart item and is snapshotted on the order
@@ -569,10 +571,11 @@ export async function createDish(
   sides: string | null = null,
   sellStart: string | null = null,
   sellEnd: string | null = null,
+  tags: string | null = null,
 ) {
   const result = await sql`
-    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url, is_catering, sides, sell_start, sell_end)
-    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl}, ${isCatering}, ${sides}, ${sellStart}, ${sellEnd})
+    INSERT INTO dishes (seller_id, name, description, price, emoji, photo_url, is_catering, sides, sell_start, sell_end, tags)
+    VALUES (${sellerId}, ${name}, ${description}, ${price}, ${emoji}, ${photoUrl}, ${isCatering}, ${sides}, ${sellStart}, ${sellEnd}, ${tags})
     RETURNING *
   `;
   return result.rows[0];
