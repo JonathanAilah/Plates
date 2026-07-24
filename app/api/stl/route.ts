@@ -4,6 +4,7 @@ import {
   registerVendor, addVenueVendor, getMyVendor, getApprovedStandaloneVendors,
   getVendorDetail, canManageVendor, addVendorMenuItem, deleteVendorMenuItem,
   createMenuInvite, initializeDatabase,
+  updateVenue, cancelVenue, removeVenueVendor,
 } from '@/lib/db';
 import { getSessionUser, requireSessionUser } from '@/lib/auth';
 
@@ -101,6 +102,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(venue);
     }
 
+    if (action === 'updateVenue') {
+      const venueId = parseInt(body.venueId);
+      if (!venueId) return NextResponse.json({ error: 'venueId required' }, { status: 400 });
+      const venue = await updateVenue(me.id, venueId, {
+        name: body.name ? String(body.name) : null,
+        description: body.description !== undefined ? (body.description ? String(body.description) : null) : undefined,
+        location: body.location !== undefined ? (body.location ? String(body.location) : null) : undefined,
+        startsOn: body.startsOn !== undefined ? (body.startsOn || null) : undefined,
+        endsOn: body.endsOn !== undefined ? (body.endsOn || null) : undefined,
+        photoUrl: body.photoUrl !== undefined ? (body.photoUrl ? String(body.photoUrl) : null) : undefined,
+      });
+      return NextResponse.json(venue);
+    }
+
+    if (action === 'cancelVenue') {
+      const venueId = parseInt(body.venueId);
+      if (!venueId) return NextResponse.json({ error: 'venueId required' }, { status: 400 });
+      const venue = await cancelVenue(me.id, venueId);
+      return NextResponse.json(venue);
+    }
+
+    if (action === 'removeVendor') {
+      const vendorId = parseInt(body.vendorId);
+      if (!vendorId) return NextResponse.json({ error: 'vendorId required' }, { status: 400 });
+      const result = await removeVenueVendor(me.id, vendorId);
+      return NextResponse.json(result);
+    }
+
     if (action === 'addVenueVendor') {
       const venueId = parseInt(body.venueId);
       const name = String(body.name || '').trim();
@@ -124,6 +153,7 @@ export async function POST(request: NextRequest) {
         name,
         price: Math.round(price * 100) / 100,
         description: body.description ? String(body.description) : null,
+        photoUrl: body.photoUrl ? String(body.photoUrl) : null,
       });
       return NextResponse.json(item);
     }
