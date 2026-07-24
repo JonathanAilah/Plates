@@ -6,6 +6,7 @@ import {
 } from '@/lib/db';
 import { generateFoodImage } from '@/lib/imageGen';
 import { getSessionUser, requireSessionUser } from '@/lib/auth';
+import { FOOD_TAGS, MAX_DISH_TAGS } from '@/lib/tags';
 
 export const maxDuration = 60;
 
@@ -93,6 +94,10 @@ export async function POST(request: NextRequest) {
         // Legacy comma-separated names (no prices)
         sides = body.sides.split(',').map((s: string) => s.trim()).filter(Boolean).slice(0, 12).join(', ').slice(0, 500) || null;
       }
+      // Food-type tags: whitelist against the shared list, cap the count
+      const tags = Array.isArray(body.tags)
+        ? body.tags.filter((t: any) => FOOD_TAGS.includes(t)).slice(0, MAX_DISH_TAGS).join(',') || null
+        : null;
       const timeRe = /^([01]?\d|2[0-3]):[0-5]\d$/;
       const sellStart = typeof body.sellStart === 'string' && timeRe.test(body.sellStart) ? body.sellStart : null;
       const sellEnd = typeof body.sellEnd === 'string' && timeRe.test(body.sellEnd) ? body.sellEnd : null;
@@ -102,7 +107,7 @@ export async function POST(request: NextRequest) {
       if (sellStart && sellEnd && sellStart >= sellEnd) {
         return NextResponse.json({ error: 'Selling window must start before it ends' }, { status: 400 });
       }
-      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null, body.isCatering === true, sides, sellStart, sellEnd);
+      const dish = await createDish(me.id, body.name, body.description, body.price, body.emoji, body.photoUrl ?? null, body.isCatering === true, sides, sellStart, sellEnd, tags);
       return NextResponse.json(dish);
     }
 
