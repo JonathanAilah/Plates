@@ -2746,8 +2746,15 @@ export async function deleteVendorMenuItem(itemId: number, vendorId: number) {
 }
 
 // Menu form invites. The token is the secret — anyone holding the link can
-// fill in that one vendor's menu once.
+// fill in that one vendor's menu once. Re-requesting the form returns the
+// existing pending invite instead of minting a second live link.
 export async function createMenuInvite(vendorId: number) {
+  const existing = await sql`
+    SELECT * FROM vendor_menu_invites
+    WHERE vendor_id = ${vendorId} AND submitted_at IS NULL
+    ORDER BY created_at DESC LIMIT 1
+  `;
+  if (existing.rows[0]) return existing.rows[0];
   const token = crypto.randomUUID().replace(/-/g, '');
   const result = await sql`
     INSERT INTO vendor_menu_invites (token, vendor_id)

@@ -1190,9 +1190,10 @@ export default function Home() {
     if (result) await refresh();
   };
 
-  // Generate a menu-form link and hand it to the owner via the native share
-  // sheet (or clipboard on desktop) to send to their vendor.
-  const sendMenuForm = async (vendorId: number, vendorName: string) => {
+  // Generate (or reuse) the menu-form link and hand it to the owner via the
+  // native share sheet, or the clipboard on desktop. Creating the link is not
+  // the same as sending it — the toasts reflect what actually happened.
+  const sendMenuForm = async (vendorId: number, vendorName: string, venueId: number) => {
     const invite = await stlPost({ action: 'createMenuInvite', vendorId });
     if (!invite) return;
     const url = `${window.location.origin}/vendor-form/${invite.token}`;
@@ -1202,13 +1203,20 @@ export default function Home() {
       url,
     };
     if (navigator.share) {
-      try { await navigator.share(data); } catch { /* user dismissed */ }
+      try {
+        await navigator.share(data);
+        showToast(`Menu form sent to ${vendorName} 📨`);
+      } catch {
+        // Share sheet dismissed — the link exists but nothing was sent
+        showToast('Cancelled — nothing was sent. Tap again anytime.');
+      }
     } else {
       try {
         await navigator.clipboard.writeText(url);
-        showToast('Menu form link copied — send it to your vendor');
+        showToast('Menu form link copied — paste it to your vendor');
       } catch { showToast(url); }
     }
+    await refreshStlVenue(venueId);
   };
 
   const loadAdminVendorApps = async () => {
@@ -4565,13 +4573,13 @@ export default function Home() {
                           <button onClick={() => setStlItemForVendor(stlItemForVendor === v.id ? null : v.id)} style={{ padding: '7px 12px', background: C.cardAlt, color: C.inkSoft, borderRadius: 10, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
                             <Plus size={13} /> Add item
                           </button>
-                          <button onClick={() => sendMenuForm(v.id, v.name)} style={{ padding: '7px 12px', background: C.greenLight, color: C.green, borderRadius: 10, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <Send size={12} /> {invite ? 'Re-send menu form' : 'Send menu form'}
+                          <button onClick={() => sendMenuForm(v.id, v.name, venue.id)} style={{ padding: '7px 12px', background: C.greenLight, color: C.green, borderRadius: 10, font: `500 12px ${font.sans}`, display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Send size={12} /> {invite ? 'Share menu form' : 'Send menu form'}
                           </button>
                         </div>
                         {invite && (
                           <div style={{ font: `400 11px ${font.sans}`, color: '#7a5c0b', marginBottom: 6 }}>
-                            Menu form sent — waiting for {v.name} to fill it in.
+                            Menu form link is ready for {v.name} — their menu appears here once they fill it in. Tap &quot;Share menu form&quot; to send it (again).
                           </div>
                         )}
                         {stlItemForVendor === v.id && (
